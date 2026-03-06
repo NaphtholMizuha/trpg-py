@@ -16,6 +16,7 @@ from .state import StateManager
 # 工具输入 Schema
 # ============================================
 
+
 class SearchInput(BaseModel):
     """RAG 检索工具输入"""
     query: str = Field(description="搜索查询文本")
@@ -214,6 +215,9 @@ class BatchGetTool(BaseTool):
             except KeyError:
                 result[path] = None
         return json.dumps(result, ensure_ascii=False)
+
+
+
 
 
 # ============================================
