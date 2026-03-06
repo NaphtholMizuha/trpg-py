@@ -28,9 +28,8 @@ class StateManager:
                 return {_type_schema(next(iter(value)))} if value else set()
             else:
                 return type(value).__name__
-        
-        # 使用 glom 的 Spec 创建类型 schema
-        return glom(self._state, Spec(_type_schema(T)))
+
+        return _type_schema(self._state)
 
     def get_or(self, path: str, default: Any = None) -> Any:
         # glom 的 get 模式可以在路径不存在时返回默认值

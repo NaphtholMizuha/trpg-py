@@ -9,7 +9,6 @@ import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
-
 from asteval import Interpreter
 
 

@@ -2,7 +2,7 @@ import os
 import json
 from openai import OpenAI
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from src.tools.toolkit import TrpgToolkit # 你的工具箱文件
+from src.tools.toolkit import TrpgToolkit
 
 # ==========================================
 # 1. 配置第三方 API (根据你的供应商修改)
@@ -18,7 +18,7 @@ MODEL_NAME = "deepseek-chat"           # 填入模型名称
 # ==========================================
 initial_world = {
     "entities": {
-        "warrior": {"name": "格罗格", "hp": 45, "atk_mod": 4},
+        "warrior": {"name": "格罗格", "hp": 45, "atk_mod": 4, "ac": 16},
         "enemies": {
             "goblin_01": {"name": "地精A", "hp": 15, "ac": 12}
         }
@@ -40,9 +40,18 @@ tool_map = {t.name: t for t in langchain_tools}
 # ==========================================
 def run_custom_api_test(prompt):
     print(f"\n🚀 [用户指令]: {prompt}")
-    
+
     messages = [
-        {"role": "system", "content": "你是一个 TRPG 结算助手。请利用提供的工具维护状态。所有数值计算必须用 evaluate_mechanics，所有修改必须用 modify_state。在结算战斗时，请直接在 evaluate_mechanics 中混合使用路径和掷骰公式进行布尔判定."},
+        {"role": "system", "content": """你是一个 TRPG 结算助手。请利用提供的工具维护状态。
+
+工具使用说明:
+- evaluate_mechanics: 执行掷骰和表达式求值，如 Roll('1d20+4')
+- modify_state: 修改世界状态，支持 set/delete/add/subtract/multiply/divide/append 操作
+  - append: 向列表追加元素，如 {"op": "append", "path": "logs", "value": {...}}
+- batch_get: 批量获取指定路径的值
+- fetch_schema: 查看当前状态结构
+
+在结算战斗时，请直接在 evaluate_mechanics 中混合使用路径和掷骰公式进行布尔判定。"""},
         {"role": "user", "content": prompt}
     ]
 
@@ -55,7 +64,7 @@ def run_custom_api_test(prompt):
             tools=openai_tools,
             tool_choice="auto" # 自动决定是否调用工具
         )
-        
+
         resp_msg = response.choices[0].message
         messages.append(resp_msg) # 把模型的回复存入上下文
 
@@ -68,15 +77,15 @@ def run_custom_api_test(prompt):
         for tool_call in resp_msg.tool_calls:
             func_name = tool_call.function.name
             func_args = json.loads(tool_call.function.arguments)
-            
+
             print(f"\n🛠️ [调用工具] {func_name} | 参数: {func_args}")
-            
+
             # 从工具映射中找到函数并执行
             if func_name in tool_map:
                 target_tool = tool_map[func_name]
                 observation = target_tool.invoke(func_args)
                 print(f"👁️ [工具返回]: {observation}")
-                
+
                 # 4. 将执行结果作为 Tool 消息反馈给模型
                 messages.append({
                     "role": "tool",
