@@ -25,7 +25,7 @@ class SearchInput(BaseModel):
 
 class EvaluateMechanicsInput(BaseModel):
     """表达式求值工具输入"""
-    expression: str = Field(description="要执行的表达式，支持掷骰函数 Roll('XdY') 和状态路径引用，支持比较操作符如 >, < ,==, >=, <=, !=")
+    expression: str = Field(description="要执行的表达式，支持掷骰函数 Roll('XdY') 和点分隔状态路径引用，支持比较操作符如 >, < ,==, >=, <=, !=")
 
 
 class FetchSchemaInput(BaseModel):

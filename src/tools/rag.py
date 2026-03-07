@@ -98,7 +98,7 @@ class Retriever:
     # ============================================
     # 检索方法
     # ============================================
-    def search(self, query: str, limit: int = 3, fetch_k: int = 20) -> list[dict]:
+    def search(self, query: str, limit: int = 5, fetch_k: int = 20) -> list[dict]:
         """
         执行混合检索（Dense + BM25 + Rerank）
 
