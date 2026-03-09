@@ -98,6 +98,36 @@ class StateManager:
     def to_json(self) -> str:
         return json.dumps(self._state, ensure_ascii=False, indent=2)
 
+    def get_all_leaf_paths(self) -> list[tuple[str, Any]]:
+        """
+        获取所有叶子节点的点分路径及其值。
+        返回: [(path, value), ...]
+        """
+        paths = []
+
+        def _traverse(obj, prefix=""):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{prefix}.{key}" if prefix else key
+                    if isinstance(value, (dict, list)) and value:
+                        _traverse(value, current_path)
+                    else:
+                        paths.append((current_path, value))
+            elif isinstance(obj, list) and obj:
+                for i, item in enumerate(obj):
+                    current_path = f"{prefix}[{i}]"
+                    if isinstance(item, (dict, list)) and item:
+                        _traverse(item, current_path)
+                    else:
+                        paths.append((current_path, item))
+
+        _traverse(self._state)
+        return paths
+
+    def get_all_paths_flat(self) -> list[str]:
+        """获取所有点分路径（仅路径字符串）"""
+        return [path for path, _ in self.get_all_leaf_paths()]
+
     @classmethod
     def from_json(cls, json_str: str) -> "StateManager":
         return cls(json.loads(json_str))

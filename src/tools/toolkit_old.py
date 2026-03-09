@@ -226,177 +226,168 @@ class BatchGetTool(BaseTool):
 
 class FetchKeysTool(BaseTool):
     """
-    路径检索工具 - 使用LLM根据查询关键词返回候选的属性路径。
+    路径检索工具 - 根据查询关键词返回候选的属性路径。
     
-    接收类似"艾尔德拉 hp"的关键词，内部调用LLM分析schema并返回最匹配的候选路径（默认3个）。
+    接收类似"艾尔德拉 hp"的关键词，返回最匹配的候选路径（默认3个）。
     主LLM应该根据返回的路径列表，选择最合适的路径来使用。
     """
-    name: str = "fetch_keys"
+    name: str = "fetchkeys"
     description: str = (
-        "根据查询关键词检索候选的状态路径。内部使用LLM分析世界状态schema。"
+        "根据查询关键词检索候选的状态路径。"
         "输入如'艾尔德拉 hp'、'goblin ac'等关键词，返回最匹配的属性路径列表。"
         "你应该根据返回的候选路径，选择最合适的路径用于batch_get或modify_state。"
     )
     args_schema: type[BaseModel] = FetchKeysInput
 
     state_manager: StateManager = Field(exclude=True)
-    llm: Any = Field(exclude=True)  # LLM客户端，用于分析路径
 
     def _run(self, keys: str, top_k: int = 3) -> str:
         import json
         
-        # 1. 准备schema和路径信息
-        schema_info = self._build_schema_info()
+        keywords = keys.lower().strip().split()
         all_paths = self._collect_candidate_paths()
         
-        # 2. 构造prompt让LLM分析
-        prompt = self._build_prompt(keys, schema_info, all_paths, top_k)
+        # 1. 先识别相关实体（通过名称匹配）
+        matched_entities = self._match_entities_by_name(keywords)
+        entity_prefixes = [e["path_prefix"] for e in matched_entities]
         
-        # 3. 调用LLM分析
-        try:
-            response = self.llm.invoke(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
-        except Exception as e:
-            return json.dumps({
-                "error": f"LLM分析失败: {e}",
-                "query": keys
-            }, ensure_ascii=False)
+        # 2. 计算每个路径的匹配分数（结合实体前缀）
+        scored_paths = []
+        for path in all_paths:
+            score = self._calculate_match_score(path, keywords, entity_prefixes)
+            if score > 0:
+                scored_paths.append((path, score))
         
-        # 4. 解析LLM返回的路径
-        candidate_paths = self._parse_llm_response(content, all_paths)
+        # 按分数排序，取 top_k
+        scored_paths.sort(key=lambda x: x[1], reverse=True)
+        top_matches = scored_paths[:top_k]
         
-        # 5. 验证路径并获取值预览
+        # 构建返回结果
         results = []
-        for path in candidate_paths[:top_k]:
+        for path, score in top_matches:
             try:
                 value = self.state_manager.get(path)
                 value_preview = str(value)[:80] + "..." if len(str(value)) > 80 else str(value)
                 results.append({
                     "path": path,
+                    "score": round(score, 2),
                     "value_preview": value_preview
                 })
             except KeyError:
                 results.append({
                     "path": path,
-                    "value_preview": "[路径无效]"
+                    "score": round(score, 2),
+                    "value_preview": "[无法访问]"
                 })
         
+        # 返回包含schema提示的结果
         return json.dumps({
-            "query": keys,
+            "query_keys": keywords,
             "candidates": results,
-            "llm_reasoning": content  # 可选：返回LLM的推理过程供参考
+            "matched_entities": matched_entities
         }, ensure_ascii=False, indent=2)
     
     def _collect_candidate_paths(self) -> list[str]:
         """收集所有候选路径（叶子节点）"""
         return [path for path, _ in self.state_manager.get_all_leaf_paths()]
     
-    def _build_schema_info(self) -> dict:
-        """构建简化的schema信息，包含实体名称映射"""
+    def _match_entities_by_name(self, keywords: list[str]) -> list[dict]:
+        """
+        根据关键词匹配实体名称，返回匹配的实体信息。
+        例如 "艾尔德拉" 会匹配到 name="艾尔德拉·银誓" 的 player_01
+        """
         state = self.state_manager.snapshot()
-        info = {
-            "entities": {},  # name -> {id, category, path_prefix}
-            "path_prefixes": []  # 可用的路径前缀
-        }
+        matched = []
         
         for category in ["players", "enemies", "objects"]:
             entities = state.get("entity", {}).get(category, {})
             for eid, edata in entities.items():
                 name = edata.get("name", "")
-                prefix = f"entity.{category}.{eid}"
-                info["path_prefixes"].append(prefix)
-                if name:
-                    info["entities"][name] = {
-                        "id": eid,
-                        "category": category,
-                        "prefix": prefix
-                    }
-        
-        return info
-    
-    def _build_prompt(self, query: str, schema_info: dict, all_paths: list[str], top_k: int) -> str:
-        """构造LLM分析prompt"""
-        import json
-        # 限制路径数量，避免prompt过长
-        max_paths = 100
-        paths_sample = all_paths[:max_paths]
-        if len(all_paths) > max_paths:
-            paths_sample.append(f"... 还有 {len(all_paths) - max_paths} 个路径")
-        
-        entities_str = json.dumps(schema_info["entities"], ensure_ascii=False, indent=2)
-        paths_str = "\n".join(f"  - {p}" for p in paths_sample)
-        
-        prompt = f"""你是一个路径分析助手。根据用户的查询关键词，从世界状态的所有可用路径中，选出最匹配的候选路径。
-
-## 世界状态中的实体
-{entities_str}
-
-## 所有可用的属性路径（部分）
-{paths_str}
-
-## 用户的查询
-"{query}"
-
-## 你的任务
-1. 分析查询中的实体名称（如"艾尔德拉"、"地精"、"火药桶"）和属性（如"hp"、"ac"、"位置"）
-2. 根据实体名称匹配到对应的实体ID（如 player_01、goblin_01）
-3. 根据属性名匹配到对应的路径
-4. 返回最匹配的 {top_k} 个候选路径
-
-## 常见属性对应关系参考
-- "hp"、"生命值" -> current_hp, max_hp, temp_hp
-- "ac"、"护甲" -> armor_class, ac
-- "str"、"力量" -> strength
-- "dex"、"敏捷" -> dexterity
-- "位置" -> position
-- "状态" -> state, conditions
-
-## 输出格式
-只返回路径列表，每行一个路径，不要其他解释：
-```
-entity.players.player_01.combat.current_hp
-entity.players.player_01.combat.max_hp
-```
-"""
-        return prompt
-    
-    def _parse_llm_response(self, content: str, valid_paths: list[str]) -> list[str]:
-        """解析LLM返回的路径列表"""
-        import re
-        
-        # 尝试从代码块中提取
-        code_block_pattern = r'```(?:\w+)?\n(.*?)```'
-        matches = re.findall(code_block_pattern, content, re.DOTALL)
-        if matches:
-            content = matches[-1]  # 取最后一个代码块
-        
-        # 提取所有看起来像路径的行
-        candidates = []
-        for line in content.strip().split('\n'):
-            line = line.strip()
-            # 过滤掉空行和注释
-            if not line or line.startswith('#') or line.startswith('//'):
-                continue
-            # 检查是否包含点分路径特征
-            if '.' in line and not line.startswith('`'):
-                # 清理可能的列表标记
-                line = re.sub(r'^[-*•]\s*', '', line)
-                candidates.append(line)
-        
-        # 验证路径是否存在于有效路径列表中（或作为前缀匹配）
-        valid_set = set(valid_paths)
-        verified = []
-        for cand in candidates:
-            if cand in valid_set:
-                verified.append(cand)
-            else:
-                # 尝试作为前缀匹配
-                for vp in valid_paths:
-                    if vp.startswith(cand) or cand in vp:
-                        verified.append(vp)
+                name_lower = name.lower()
+                
+                # 检查是否匹配任何关键词
+                for kw in keywords:
+                    # 完全匹配、包含匹配或简称匹配
+                    if (kw == name_lower or 
+                        kw in name_lower or 
+                        name_lower.startswith(kw)):
+                        matched.append({
+                            "name": name,
+                            "id": eid,
+                            "category": category,
+                            "path_prefix": f"entity.{category}.{eid}",
+                            "matched_keyword": kw
+                        })
                         break
         
-        return verified[:10]  # 最多返回10个
+        return matched
+    
+    # 常见属性别名映射
+    ATTR_ALIASES: ClassVar[dict] = {
+        "hp": ["current_hp", "max_hp", "temp_hp", "hit_dice"],
+        "生命值": ["current_hp", "max_hp"],
+        "生命": ["current_hp", "max_hp"],
+        "ac": ["armor_class", "ac"],
+        "护甲": ["armor_class"],
+        "护甲值": ["armor_class"],
+        "str": ["strength"],
+        "力量": ["strength"],
+        "dex": ["dexterity"],
+        "敏捷": ["dexterity"],
+        "con": ["constitution"],
+        "体质": ["constitution"],
+        "int": ["intelligence"],
+        "智力": ["intelligence"],
+        "wis": ["wisdom"],
+        "感知": ["wisdom"],
+        "cha": ["charisma"],
+        "魅力": ["charisma"],
+    }
+
+    def _calculate_match_score(self, path: str, keywords: list[str], entity_prefixes: list[str]) -> float:
+        """计算路径与关键词的匹配分数"""
+        path_lower = path.lower()
+        score = 0.0
+        
+        # 1. 如果路径属于已识别的实体，给予基础加分
+        matched_entity = None
+        for prefix in entity_prefixes:
+            if path_lower.startswith(prefix.lower()):
+                score += 2.0  # 实体匹配的基础分
+                matched_entity = prefix
+                break
+        
+        # 2. 关键词匹配（属性部分）
+        for kw in keywords:
+            kw_lower = kw.lower()
+            
+            # 跳过已用于实体匹配的关键词
+            if matched_entity and any(kw_lower in e.lower() for e in entity_prefixes):
+                continue
+            
+            # 检查是否是属性别名
+            if kw_lower in self.ATTR_ALIASES:
+                # 别名匹配到实际路径
+                for actual_attr in self.ATTR_ALIASES[kw_lower]:
+                    if actual_attr in path_lower:
+                        score += 1.5  # 别名匹配加分
+                        if path_lower.endswith(actual_attr):
+                            score += 0.5
+                        break
+            
+            # 完整匹配路径的一部分（ID或属性）
+            elif kw_lower in path_lower:
+                score += 1.0
+                # 如果是路径的最后一部分（属性名），额外加分
+                if path_lower.endswith(kw_lower):
+                    score += 0.5
+        
+        return score
+    
+
+
+
+
 
 
 # ============================================
@@ -406,11 +397,10 @@ entity.players.player_01.combat.max_hp
 class TrpgToolkit(BaseToolkit):
     """TRPG 工具箱，组合 Logic、RAG、State 三个核心类"""
 
-    def __init__(self, initial_state: dict[str, Any] | None = None, llm=None, **kwargs):
+    def __init__(self, initial_state: dict[str, Any] | None = None, **kwargs):
         self._state_manager = StateManager(initial_state)
         self._logic_engine = LogicEngine()
         self._retriever = Retriever(**kwargs)
-        self._llm = llm  # 可选的LLM客户端，用于fetchkeys
 
     @property
     def state_manager(self) -> StateManager:
@@ -435,5 +425,5 @@ class TrpgToolkit(BaseToolkit):
             FetchSchemaTool(state_manager=self._state_manager),
             BatchPatchTool(state_manager=self._state_manager),
             BatchGetTool(state_manager=self._state_manager),
-            FetchKeysTool(state_manager=self._state_manager, llm=self._llm),
+            FetchKeysTool(state_manager=self._state_manager),
         ]
