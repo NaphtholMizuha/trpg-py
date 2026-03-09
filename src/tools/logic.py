@@ -92,7 +92,10 @@ class LogicEngine:
             return record.total
 
         symtable['Roll'] = roll_func
-
+        
+        # 注：asteval 原生支持 Python 条件表达式: x if cond else y
+        # 示例: Roll('2d6') if Roll('1d20') >= 15 else 0
+        
         return Interpreter(symtable=symtable)
 
     @staticmethod
@@ -100,6 +103,7 @@ class LogicEngine:
         """
         递归转换嵌套字典为 SimpleNamespace
         支持属性访问语法: player.ac
+        支持数组索引: weapon.0 访问 weapons[0]
         """
         result = {}
         for k, v in d.items():
@@ -108,6 +112,17 @@ class LogicEngine:
                 # 如果结果只有字典，包装为 SimpleNamespace
                 if isinstance(result[k], dict):
                     result[k] = SimpleNamespace(**result[k])
+            elif isinstance(v, list):
+                # 将列表转换为字典，索引作为key，支持 .0 .1 访问
+                list_dict = {}
+                for i, item in enumerate(v):
+                    if isinstance(item, dict):
+                        list_dict[str(i)] = LogicEngine._convert_to_namespace(item)
+                        if isinstance(list_dict[str(i)], dict):
+                            list_dict[str(i)] = SimpleNamespace(**list_dict[str(i)])
+                    else:
+                        list_dict[str(i)] = item
+                result[k] = SimpleNamespace(**list_dict)
             else:
                 result[k] = v
         return result
