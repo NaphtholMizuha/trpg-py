@@ -1,109 +1,109 @@
 """
-LangGraph工作流组装
+LangGraph工作流组装 - V3版本
+
+流程:
+planner -> dm_confirm_plan -> executor -> chain_agent -> dm_confirm_chain -> next_task
+                                     ^___________________________|
+                                          (有连锁任务且DM确认)
 """
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from ..types import AgentState
-from ..agents import InterfaceAgent, RagAgent, TaskAgent, NarratorAgent, ChainAgent
-from ..executors.logic import LogicRunner
-from ..executors.state_writer import StateWriter
-from ..tools.rag import Retriever
-from ..tools.state import StateManager
+from ..agents import PlannerAgent, ExecutorAgent, ChainAgent
+from ..tools.toolkit import TrpgToolkit
 
 from .nodes import (
-    create_interface_node,
-    create_summarizer_node,
-    create_ragagent_node,
-    create_taskagent_node,
-    dm_confirm_node,
-    create_execute_step_node,
-    create_statewriter_node,
+    create_planner_node,
+    dm_confirm_plan_node,
+    create_executor_node,
     create_chainagent_node,
-    chain_confirm_node,
+    dm_confirm_chain_node,
     next_task_node,
-    should_continue,
     should_continue_chain,
     should_continue_next_task,
 )
 
 
-def create_workflow(initial_state: dict, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None):
-    """创建V2工作流"""
-    
-    # 初始化状态管理器
-    state_manager = StateManager(initial_state)
-    
-    # 初始化组件
-    interface_agent = InterfaceAgent(model=model, api_key=api_key, base_url=base_url)
-    retriever = Retriever()
-    rag_agent = RagAgent(model=model, api_key=api_key, base_url=base_url, retriever=retriever)
-    task_agent = TaskAgent(model=model, api_key=api_key, base_url=base_url)
-    narrator_agent = NarratorAgent(model=model, api_key=api_key, base_url=base_url)
-    logic_runner = LogicRunner(state_manager)
-    state_writer = StateWriter(state_manager)
-    chain_agent = ChainAgent()
-    
+def create_workflow(
+    world_state_path: str = "data/world_state.txt",
+    model: str = "gpt-4o",
+    api_key: str | None = None,
+    base_url: str | None = None
+):
+    """
+    创建V3工作流 - Agent架构版本
+
+    核心组件:
+    - PlannerAgent: 合并意图识别+RAG+任务生成
+    - ExecutorAgent: 合并逻辑计算+状态写入
+    - ChainAgent: 连锁检测，支持Tools
+
+    流程:
+    planner -> dm_confirm_plan -> executor -> chain_agent -> dm_confirm_chain
+                                                  ^               |
+                                                  |_______________|
+    """
+    # 初始化工具箱（内存模式，不写入文件）
+    toolkit = TrpgToolkit(world_state_path=world_state_path, persist=False)
+    tools = toolkit.get_tools()
+    tool_map = {t.name: t for t in tools}
+
+    # Agent初始化
+    planner_agent = PlannerAgent(
+        model=model, api_key=api_key, base_url=base_url,
+        tools=[tool_map["fetch_keys"], tool_map["read"], tool_map["search"]]
+    )
+    executor_agent = ExecutorAgent(
+        model=model, api_key=api_key, base_url=base_url,
+        tools=[tool_map["fetch_keys"], tool_map["read"], tool_map["evaluate"], tool_map["write"]]
+    )
+    chain_agent = ChainAgent(
+        model=model, api_key=api_key, base_url=base_url,
+        tools=[tool_map["fetch_keys"], tool_map["read"], tool_map["search"]]
+    )
+
     # 创建工作流
     workflow = StateGraph(AgentState)
-    
+
     # 添加节点
-    workflow.add_node("interface", create_interface_node(interface_agent))
-    workflow.add_node("summarizer", create_summarizer_node(state_manager))
-    workflow.add_node("rag_agent", create_ragagent_node(rag_agent))
-    workflow.add_node("taskagent", create_taskagent_node(task_agent))
-    workflow.add_node("dm_confirm", dm_confirm_node)
-    workflow.add_node("execute_step", create_execute_step_node(logic_runner, narrator_agent))
-    workflow.add_node("statewriter", create_statewriter_node(state_writer))
-    workflow.add_node("chainagent", create_chainagent_node(chain_agent))
-    workflow.add_node("chain_confirm", chain_confirm_node)
+    workflow.add_node("planner", create_planner_node(planner_agent))
+    workflow.add_node("dm_confirm_plan", dm_confirm_plan_node)
+    workflow.add_node("executor", create_executor_node(executor_agent))
+    workflow.add_node("chain_agent", create_chainagent_node(chain_agent))
+    workflow.add_node("dm_confirm_chain", dm_confirm_chain_node)
     workflow.add_node("next_task", next_task_node)
-    
+
     # 设置入口
-    workflow.set_entry_point("interface")
-    
+    workflow.set_entry_point("planner")
+
     # 添加边
-    workflow.add_edge("interface", "summarizer")
-    workflow.add_edge("summarizer", "rag_agent")
-    workflow.add_edge("rag_agent", "taskagent")
-    workflow.add_edge("taskagent", "dm_confirm")
-    workflow.add_edge("dm_confirm", "execute_step")
-    
-    # 条件边
+    workflow.add_edge("planner", "dm_confirm_plan")
+    workflow.add_edge("dm_confirm_plan", "executor")
+    workflow.add_edge("executor", "chain_agent")
+
+    # 连锁条件边
     workflow.add_conditional_edges(
-        "execute_step",
-        should_continue,
-        {
-            "execute_step": "execute_step",
-            "statewriter": "statewriter",
-            "chain": "chainagent",
-            "next_task": "next_task",
-            "end": END
-        }
-    )
-    
-    workflow.add_edge("statewriter", "chainagent")
-    
-    workflow.add_conditional_edges(
-        "chainagent",
+        "chain_agent",
         should_continue_chain,
         {
-            "chain_confirm": "chain_confirm",
+            "dm_confirm_chain": "dm_confirm_chain",
             "next_task": "next_task"
         }
     )
-    
-    workflow.add_edge("chain_confirm", "next_task")
-    
+
+    workflow.add_edge("dm_confirm_chain", "next_task")
+
+    # 下一个任务条件边
     workflow.add_conditional_edges(
         "next_task",
         should_continue_next_task,
         {
-            "summarizer": "summarizer",
+            "executor": "executor",
             "end": END
         }
     )
-    
+
     # 编译
     memory = MemorySaver()
-    return workflow.compile(checkpointer=memory), state_manager
+    return workflow.compile(checkpointer=memory), toolkit.store
