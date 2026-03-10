@@ -68,22 +68,6 @@ class TaskAgent:
   * 生物：进行豁免检定（saving throw）、受暴击规则影响
   * 物品：通常不做豁免检定（某些需要DM判定），直接应用效果（如被点燃、被摧毁）
   * 如果目标是[物品]，不要让它做豁免检定，直接执行效果
-- 攻击流程（一步完成）：
-  attack_roll = Roll('1d20')
-  str_mod = entity.players.player_01.attributes.modifiers.strength
-  prof = entity.players.player_01.proficiency.bonus
-  if attack_roll == 20:
-      damage = Roll('2d8') + str_mod
-  elif attack_roll == 1:
-      damage = 0
-  elif attack_roll + str_mod + prof >= target.ac:
-      damage = Roll('1d8') + str_mod
-  else:
-      damage = 0
-  damage  # 返回伤害值
-- 对物品施法（如点燃火药桶）：
-  * 直接设置状态：entity.objects.explosive_barrel.state = 'ignited'
-  * 物品不做豁免检定
 
 必须根据上面提供的D&D 5e规则来生成步骤，不要依赖模型记忆。
 

@@ -29,7 +29,7 @@ def create_interface_node(interface_agent):
 
 
 def create_summarizer_node(state_manager):
-    """创建状态摘要节点（直接列出相关叶子节点，并标记实体类型）"""
+    """创建状态摘要节点（只列出相关路径，表达式中引用这些路径）"""
     def summarizer_node(state: AgentState) -> AgentState:
         task = state["current_task"]
         if not task:
@@ -40,9 +40,13 @@ def create_summarizer_node(state_manager):
         # 获取所有叶子路径
         all_paths = state_manager.get_all_leaf_paths()
         
+        # 只保留 entity 相关的路径（过滤掉 metadata 等）
+        entity_paths = [(p, v) for p, v in all_paths if p.startswith('entity.')]
+        
         # 提取任务中提到的实体关键词，并检测实体类型
         keywords = []
-        entity_types = {}  # 路径 -> 类型
+        entity_types = {}  # 实体ID -> 类型
+        entity_name_map = {}  # 实体ID -> 名称
         
         if task.actor:
             keywords.append(task.actor.lower())
@@ -50,8 +54,8 @@ def create_summarizer_node(state_manager):
             target_str = str(task.target).lower()
             keywords.append(target_str)
         
-        # 检测实体类型（简单规则）
-        for path, value in all_paths:
+        # 检测实体类型和名称（简单规则）
+        for path, value in entity_paths:
             path_lower = path.lower()
             if 'entity.players' in path_lower or 'entity.enemies' in path_lower:
                 entity_type = "生物"
@@ -66,10 +70,13 @@ def create_summarizer_node(state_manager):
                 if len(parts) >= 3:
                     entity_id = parts[2]
                     entity_types[entity_id] = entity_type
+                    # 如果是name字段，记录实体名称
+                    if parts[-1] == "name" and isinstance(value, str):
+                        entity_name_map[entity_id] = value
         
-        # 过滤相关路径
+        # 过滤相关路径（只返回路径，不返回值）
         relevant_paths = []
-        for path, value in all_paths:
+        for path, value in entity_paths:
             path_lower = path.lower()
             # 检查是否匹配任何关键词
             if any(kw in path_lower or path_lower.find(kw.replace(' ', '_')) >= 0 for kw in keywords):
@@ -81,32 +88,41 @@ def create_summarizer_node(state_manager):
                     if entity_id in entity_types:
                         entity_type_str = f"[{entity_types[entity_id]}] "
                 
-                # 格式化显示
-                value_str = str(value)
-                if len(value_str) > 30:
-                    value_str = value_str[:27] + "..."
-                relevant_paths.append(f"  {entity_type_str}{path} = {value_str}")
+                # 只输出路径，不输出值
+                relevant_paths.append(f"  {entity_type_str}{path}")
         
-        # 如果没有匹配到，显示所有路径
+        # 如果没有匹配到，显示所有 entity 路径（前30个）
         if not relevant_paths:
-            for path, value in all_paths[:20]:
+            for path, value in entity_paths[:30]:
                 parts = path.split('.')
                 entity_type_str = ""
                 if len(parts) >= 3:
                     entity_id = parts[2]
                     if entity_id in entity_types:
                         entity_type_str = f"[{entity_types[entity_id]}] "
-                relevant_paths.append(f"  {entity_type_str}{path} = {str(value)[:30]}")
+                relevant_paths.append(f"  {entity_type_str}{path}")
         
-        summary = "\n".join(relevant_paths)
+        # 构建摘要：路径列表 + 使用说明
+        lines = ["相关属性路径（在表达式中直接引用这些路径）："]
+        lines.extend(relevant_paths)
+        
+        # 添加使用说明
+        lines.append("\n【表达式编写指南】")
+        lines.append("1. 直接引用路径获取值，如: entity.players.player_01.combat.current_hp")
+        lines.append("2. 使用 Roll('XdY') 进行掷骰，如: Roll('1d20') + entity.players.player_01.attributes.modifiers.strength")
+        lines.append("3. 支持 Python 完整语法（if/else、变量赋值）:")
+        lines.append("   attack = Roll('1d20') + entity.players.player_01.attributes.modifiers.strength")
+        lines.append("   damage = Roll('2d6') if attack >= entity.enemies.goblin_01.ac else 0")
+        lines.append("   damage")
+        lines.append("4. 执行时会自动展示计算过程，如: '15 [1d20] + 3 [strength] >= 15 [ac]'")
         
         # 添加实体类型提示（用于物品豁免处理）
-        type_hints = []
         for entity_id, entity_type in entity_types.items():
             if entity_type == "物品":
-                type_hints.append(f"\n注意: {entity_id} 是{entity_type}，通常不进行豁免检定")
+                name = entity_name_map.get(entity_id, entity_id)
+                lines.append(f"\n注意: {name}({entity_id}) 是{entity_type}，通常不进行豁免检定")
         
-        summary += "".join(type_hints)
+        summary = "\n".join(lines)
         state["state_summary"] = summary
         
         print(f"\n{summary}\n")

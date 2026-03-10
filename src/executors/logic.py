@@ -1,10 +1,9 @@
 """
 LogicRunner - 逻辑运行器
-使用 asteval 执行表达式，支持完整 Python 语法（if/else、变量赋值）
+使用 LogicEngine 执行表达式，支持详细计算轨迹
 """
-from asteval import Interpreter
-
 from ..types import LogicResult
+from ..tools.logic import LogicEngine
 
 
 class LogicRunner:
@@ -12,9 +11,10 @@ class LogicRunner:
     
     def __init__(self, state_manager):
         self.state_manager = state_manager
+        self.logic_engine = LogicEngine()
     
     def evaluate(self, expression: str, step_context: dict = None) -> LogicResult:
-        """执行表达式"""
+        """执行表达式，返回详细计算轨迹"""
         if not expression or expression == "None":
             return LogicResult(success=True, result=None, resolved_paths={}, trace=[])
         
@@ -22,28 +22,22 @@ class LogicRunner:
             # 获取当前状态
             state = self.state_manager.snapshot()
             
-            # 替换 step_X_result 引用
+            # 替换 step_X_result 引用为实际值（在表达式中）
             expr = expression
             if step_context:
                 for key, value in step_context.items():
                     placeholder = f"{key}_result"
-                    expr = expr.replace(placeholder, str(value))
+                    # 将值注入到状态中，让表达式可以引用
+                    state[placeholder] = value
             
-            # 创建 interpreter
-            interp = Interpreter()
-            
-            # 注入状态变量（展开为顶层变量）
-            flat_state = self._flatten_state(state)
-            interp.symtable.update(flat_state)
-            
-            # 执行表达式
-            result = interp(expr)
+            # 使用 LogicEngine 执行，获取详细轨迹
+            eval_result = self.logic_engine.eval(expr, state)
             
             return LogicResult(
-                success=len(interp.error) == 0,
-                result=result,
+                success=True,
+                result=eval_result.result,
                 resolved_paths={},
-                trace=[f"执行成功: {result}"]
+                trace=[eval_result.resolved]  # 使用详细的解析轨迹
             )
             
         except Exception as e:
@@ -53,14 +47,3 @@ class LogicRunner:
                 resolved_paths={},
                 trace=[f"执行失败: {e}"]
             )
-    
-    def _flatten_state(self, data: dict, prefix: str = "") -> dict:
-        """将嵌套字典展开为点分隔的键值对"""
-        items = {}
-        for k, v in data.items():
-            new_key = f"{prefix}.{k}" if prefix else k
-            if isinstance(v, dict):
-                items.update(self._flatten_state(v, new_key))
-            else:
-                items[new_key] = v
-        return items

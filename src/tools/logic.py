@@ -32,7 +32,8 @@ class LogicEngine:
 
     # 正则表达式
     DICE_FUNC_REGEX = re.compile(r'(?i)Roll\(["\']([^"\']*)["\']\)')
-    IDENT_REGEX = re.compile(r'[a-zA-Z_][a-zA-Z0-9._]*')
+    # 匹配标识符路径，支持点分隔和方括号索引（如 entity.players.player_01.class[0].level）
+    IDENT_REGEX = re.compile(r'[a-zA-Z_][a-zA-Z0-9._]*(?:\[\d+\](?:\.[a-zA-Z_][a-zA-Z0-9._]*)*)*')
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -98,34 +99,29 @@ class LogicEngine:
         
         return Interpreter(symtable=symtable)
 
-    @staticmethod
-    def _convert_to_namespace(d: dict[str, Any]) -> dict[str, Any]:
+    @classmethod
+    def _convert_to_namespace(cls, d: dict[str, Any]) -> SimpleNamespace:
         """
         递归转换嵌套字典为 SimpleNamespace
         支持属性访问语法: player.ac
-        支持数组索引: weapon.0 访问 weapons[0]
+        支持列表索引访问: player.class[0].name
         """
         result = {}
         for k, v in d.items():
             if isinstance(v, dict):
-                result[k] = LogicEngine._convert_to_namespace(v)
-                # 如果结果只有字典，包装为 SimpleNamespace
-                if isinstance(result[k], dict):
-                    result[k] = SimpleNamespace(**result[k])
+                result[k] = cls._convert_to_namespace(v)
             elif isinstance(v, list):
-                # 将列表转换为字典，索引作为key，支持 .0 .1 访问
-                list_dict = {}
-                for i, item in enumerate(v):
+                # 保持为列表，但转换其中的字典元素
+                converted_list = []
+                for item in v:
                     if isinstance(item, dict):
-                        list_dict[str(i)] = LogicEngine._convert_to_namespace(item)
-                        if isinstance(list_dict[str(i)], dict):
-                            list_dict[str(i)] = SimpleNamespace(**list_dict[str(i)])
+                        converted_list.append(cls._convert_to_namespace(item))
                     else:
-                        list_dict[str(i)] = item
-                result[k] = SimpleNamespace(**list_dict)
+                        converted_list.append(item)
+                result[k] = converted_list
             else:
                 result[k] = v
-        return result
+        return SimpleNamespace(**result)
 
     def _physical_roll(self, formula: str) -> DiceRecord:
         """
@@ -206,17 +202,36 @@ class LogicEngine:
     @staticmethod
     def _get_deep(data: dict[str, Any], path: str) -> Any:
         """
-        深度获取嵌套字典中的值
+        深度获取嵌套字典/列表中的值
 
         Args:
             data: 数据字典
-            path: 点分隔的路径，如 "entities.player.ac"
+            path: 点分隔的路径，支持列表索引如 "entity.players.player_01.class[0].level"
         """
-        keys = path.split('.')
+        import re
+        # 解析路径：支持点分隔和方括号索引
+        # 例如 "entity.players.player_01.class[0].level" 
+        # 拆分为 ['entity', 'players', 'player_01', 'class', '0', 'level']
+        tokens = re.split(r'\.|\[(\d+)\]', path)
+        tokens = [t for t in tokens if t is not None and t != '']
+        
         current = data
-        for key in keys:
+        for key in tokens:
             if isinstance(current, dict) and key in current:
                 current = current[key]
+            elif isinstance(current, list):
+                # 尝试作为索引访问
+                try:
+                    idx = int(key)
+                    if 0 <= idx < len(current):
+                        current = current[idx]
+                    else:
+                        return None
+                except ValueError:
+                    return None
+            elif hasattr(current, key) and not callable(getattr(current, key, None)):
+                # 支持 SimpleNamespace 的属性访问
+                current = getattr(current, key)
             else:
                 return None
         return current
