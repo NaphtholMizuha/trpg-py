@@ -31,13 +31,14 @@ class KVChange:
 
 @dataclass
 class PlannedTask:
-    """PlannerAgent生成的任务"""
+    """统一任务描述 - 自然语言为主，结构化字段可选"""
     task_id: str
-    description: str  # 自然语言任务描述
-    actor: str  # 行动者名称
-    action: str = ""  # 动作描述
-    target: str | None = None  # 目标名称
-    context: dict = field(default_factory=dict)  # 执行上下文（如攻击加值、AC等数值）
+    natural_description: str  # 核心：自然语言描述包含所有信息
+    actor: str | None = None  # 可选，可从描述中解析
+    target: str | None = None  # 可选
+    action: str = ""  # 可选
+    context: dict = field(default_factory=dict)  # 执行上下文（保留向后兼容）
+    source: str = "dm"  # "dm" | "chain" | "system"，标记任务来源
 
 
 @dataclass

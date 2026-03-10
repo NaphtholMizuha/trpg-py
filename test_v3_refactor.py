@@ -53,7 +53,7 @@ def run_scenario(workflow, store, user_input: str, thread_id: str):
             if output.get("current_task"):
                 task = output["current_task"]
                 if printed_task_id != id(task):
-                    print(f"\n📝 当前任务: {task.description}")
+                    print(f"\n📝 当前任务: {task.natural_description}")
                     print(f"   行动者: {task.actor}, 目标: {task.target}, 动作: {task.action}")
                     printed_task_id = id(task)
 
@@ -82,7 +82,7 @@ def run_scenario(workflow, store, user_input: str, thread_id: str):
             if output.get("pending_chain_tasks"):
                 print(f"\n⏸️  待审批连锁任务:")
                 for task in output["pending_chain_tasks"]:
-                    print(f"   - {task.description}")
+                    print(f"   - {task.natural_description}")
 
         print("\n✅ 场景执行完成")
 

@@ -105,7 +105,7 @@ class ExecutorAgent:
         2. 执行tools计算和写入
         3. 返回执行结果
         """
-        print(f"\n⚡ ExecutorAgent: 执行任务 - {task.description}")
+        print(f"\n⚡ ExecutorAgent: 执行任务 - {task.natural_description}")
 
         # 构建对话历史
         messages = [
@@ -113,7 +113,7 @@ class ExecutorAgent:
             HumanMessage(content=f"""请执行以下任务:
 
 任务ID: {task.task_id}
-任务描述: {task.description}
+任务描述: {task.natural_description}
 行动者: {task.actor}
 目标: {task.target}
 动作: {task.action}

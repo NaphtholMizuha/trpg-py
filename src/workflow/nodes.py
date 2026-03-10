@@ -19,7 +19,7 @@ def create_planner_node(planner_agent):
             # 调用PlannerAgent生成任务
             task = planner_agent.plan(user_input)
 
-            print(f"🤖 PlannerAgent: 生成任务 - {task.description}")
+            print(f"🤖 PlannerAgent: 生成任务 - {task.natural_description}")
             print(f"   行动者: {task.actor}, 目标: {task.target}, 动作: {task.action}")
 
             state["current_task"] = task
@@ -30,7 +30,7 @@ def create_planner_node(planner_agent):
 
 
 def dm_confirm_plan_node(state: AgentState) -> AgentState:
-    """DM任务审批节点"""
+    """DM任务审批节点 - 手动确认"""
     task = state.get("current_task")
     if not task:
         return state
@@ -38,7 +38,7 @@ def dm_confirm_plan_node(state: AgentState) -> AgentState:
     print(f"\n" + "="*50)
     print(f"⏸️  DM 任务审批节点")
     print(f"="*50)
-    print(f"任务: {task.description}")
+    print(f"任务: {task.natural_description}")
     print(f"行动者: {task.actor}")
     print(f"目标: {task.target}")
     print(f"动作: {task.action}")
@@ -47,8 +47,34 @@ def dm_confirm_plan_node(state: AgentState) -> AgentState:
         for k, v in task.context.items():
             print(f"  {k}: {v}")
 
-    print(f"\n✅ 自动确认执行")
-    state["plan_approval_result"] = True
+    # 手动确认
+    while True:
+        response = input("\n确认执行此任务? [y/n/e(编辑)]: ").strip().lower()
+        if response in ('y', 'yes'):
+            print("✅ 已确认执行")
+            state["plan_approval_result"] = True
+            break
+        elif response in ('n', 'no'):
+            print("❌ 已拒绝执行")
+            state["plan_approval_result"] = False
+            # 拒绝时从队列中移除该任务
+            queue = state.get("task_queue", [])
+            if task in queue:
+                queue.remove(task)
+            state["task_queue"] = queue
+            state["current_task"] = None
+            break
+        elif response in ('e', 'edit'):
+            print("\n✏️ 编辑模式 - 输入修改后的任务描述（直接回车保持原样）:")
+            new_desc = input(f"原描述: {task.natural_description}\n新描述: ").strip()
+            if new_desc:
+                task.natural_description = new_desc
+                print(f"✅ 已更新任务描述")
+            print("✅ 已确认执行修改后的任务")
+            state["plan_approval_result"] = True
+            break
+        else:
+            print("请输入 y(确认)、n(拒绝) 或 e(编辑)")
 
     return state
 
@@ -84,22 +110,21 @@ def create_executor_node(executor_agent):
 
 
 def create_chainagent_node(chain_agent):
-    """创建ChainAgent节点 (V3版本)"""
+    """创建ChainAgent节点 (V4版本) - 自然语言任务队列"""
     def chainagent_node(state: AgentState) -> AgentState:
         changes = state.get("committed_changes", [])
         if not changes:
             return state
 
-        # 调用V3 check_chains
-        triggers, pending_tasks = chain_agent.check_chains(changes[-5:], "")
+        # 调用V4 check_chains - 返回自然语言任务列表
+        chain_tasks = chain_agent.check_chains(changes[-5:], "")
 
-        state["chain_triggers"] = triggers
-        state["pending_chain_tasks"] = pending_tasks
+        state["pending_chain_tasks"] = chain_tasks
 
-        if triggers:
-            print(f"\n🔗 ChainAgent: 检测到 {len(triggers)} 个连锁触发")
-            for t in triggers:
-                print(f"   [{t.priority}] {t.condition}")
+        if chain_tasks:
+            print(f"\n🔗 ChainAgent: 检测到 {len(chain_tasks)} 个连锁任务")
+            for t in chain_tasks:
+                print(f"   - {t.natural_description[:50]}...")
         else:
             print(f"\n🔗 ChainAgent: 无连锁反应")
 
@@ -108,7 +133,7 @@ def create_chainagent_node(chain_agent):
 
 
 def dm_confirm_chain_node(state: AgentState) -> AgentState:
-    """DM连锁审批节点"""
+    """DM连锁审批节点 - 手动确认"""
     pending_tasks = state.get("pending_chain_tasks", [])
     if not pending_tasks:
         return state
@@ -118,17 +143,41 @@ def dm_confirm_chain_node(state: AgentState) -> AgentState:
     print(f"="*50)
 
     for i, task in enumerate(pending_tasks, 1):
-        print(f"\n[{i}] {task.description}")
+        print(f"\n[{i}] {task.natural_description}")
         print(f"    行动者: {task.actor}")
         print(f"    目标: {task.target}")
         print(f"    动作: {task.action}")
 
-    print(f"\n✅ 自动确认连锁")
-    state["chain_approval_result"] = True
-
-    # 将确认的任务加入队列
+    # 手动确认（支持单个任务编辑）
+    approved_tasks = []
     for task in pending_tasks:
-        state["task_queue"] = state.get("task_queue", []) + [task]
+        while True:
+            print(f"\n  任务: {task.natural_description[:60]}...")
+            response = input("  确认此连锁任务? [y/n/e(编辑)]: ").strip().lower()
+            if response in ('y', 'yes'):
+                approved_tasks.append(task)
+                break
+            elif response in ('n', 'no'):
+                print("  ❌ 已拒绝此任务")
+                break
+            elif response in ('e', 'edit'):
+                print(f"  ✏️ 编辑模式")
+                new_desc = input(f"  新描述: ").strip()
+                if new_desc:
+                    task.natural_description = new_desc
+                approved_tasks.append(task)
+                break
+            else:
+                print("  请输入 y(确认)、n(拒绝) 或 e(编辑)")
+
+    if approved_tasks:
+        print(f"\n✅ 已确认 {len(approved_tasks)}/{len(pending_tasks)} 个连锁任务")
+        state["chain_approval_result"] = True
+        for task in approved_tasks:
+            state["task_queue"] = state.get("task_queue", []) + [task]
+    else:
+        print(f"\n❌ 已拒绝所有连锁任务")
+        state["chain_approval_result"] = False
 
     return state
 
@@ -149,7 +198,7 @@ def next_task_node(state: AgentState) -> AgentState:
         state["chain_triggers"] = []
         state["pending_chain_tasks"] = []
         print(f"\n{'='*50}")
-        print(f"📝 新任务: {queue[0].description}")
+        print(f"📝 新任务: {queue[0].natural_description}")
     else:
         state["current_task"] = None
 

@@ -219,14 +219,15 @@ class PlannerAgent:
 
             task = PlannedTask(
                 task_id=task_id,
-                description=description,
+                natural_description=description,
                 actor=actor,
                 target=target,
                 action=action,
-                context=context
+                context=context,
+                source="dm"
             )
 
-            print(f"   ✅ 生成任务: {task.description}")
+            print(f"   ✅ 生成任务: {task.natural_description}")
             print(f"      行动者: {task.actor}, 目标: {task.target}, 动作: {task.action}")
 
             return task
@@ -237,7 +238,8 @@ class PlannerAgent:
             # 失败时使用原始输入创建基本任务
             return PlannedTask(
                 task_id=f"task_{uuid.uuid4().hex[:8]}",
-                description=original_input,
+                natural_description=original_input,
                 actor="未知",
-                context={"raw_description": content}
+                context={"raw_description": content},
+                source="dm"
             )
