@@ -38,3 +38,14 @@ logger = get_logger(f"{__class__.__module__}.{__class__.__name__}")
 # ❌ 错误 - 不要用 print
 print("debug info")
 ```
+
+## 测试规范
+
+```bash
+
+uv run [target]
+
+# ❌ 错误 - 不要用 python
+print("debug info")
+python [target]
+```

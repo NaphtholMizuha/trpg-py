@@ -79,18 +79,29 @@ class BaseAgent(ABC):
         tool_args = tool_call["args"]
         tool_id = tool_call.get("id", "unknown")
 
-        self._logger.info("调用工具", tool_name=tool_name, tool_id=tool_id)
+        # 高层级：工具调用事件
+        self._logger.info(f"▶ 调用工具 [{tool_name}]")
+
+        # 低层级：输入参数
+        self._logger.debug(f"  参数: {tool_args}")
 
         if tool_name in self.tools:
             try:
                 result = self.tools[tool_name].invoke(tool_args)
-                # 截断过长结果
-                if len(str(result)) > 2000:
-                    result = str(result)[:2000] + "\n... [截断]"
+
+                # 截断过长结果用于日志显示
+                display_result = str(result)
+                if len(display_result) > 500:
+                    display_result = display_result[:500] + "\n  ... [截断]"
+
+                # 低层级：输出结果
+                self._logger.debug(f"  结果: {display_result}")
                 return result
             except Exception as e:
-                self._logger.error("工具执行错误", tool_name=tool_name, error=str(e))
+                self._logger.error(f"  ✗ 工具执行错误: {e}")
                 return f"错误: {e}"
+
+        self._logger.error(f"  ✗ 未知工具: {tool_name}")
         return f"错误: 未知工具 {tool_name}"
 
     def _should_force_output(self, iteration: int, response: AIMessage) -> bool:

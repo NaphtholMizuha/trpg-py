@@ -44,6 +44,16 @@ class KVChange:
     operation: str
 
 
+# ============== 连锁相关 ==============
+
+@dataclass
+class PotentialChain:
+    """Planner预判的可能连锁"""
+    condition: str       # 触发条件描述，如"目标HP降至0"
+    chain_type: str      # 连锁类型标记，如"death", "explosion", "concentration"
+    description: str     # 连锁效果描述
+
+
 # ============== V3 任务类型 ==============
 
 @dataclass
@@ -58,6 +68,18 @@ class PlannedTask:
     source: str = "dm"  # "dm" | "chain" | "system"，标记任务来源
     requires_confirmation: bool = False  # 新增：是否需要DM确认
     priority: int = 0  # 新增：任务优先级
+    potential_chains: list[PotentialChain] = field(default_factory=list)  # 可能触发的连锁
+    dm_notes: str | None = None  # DM审批时的批注/修改建议
+
+
+@dataclass
+class FieldChange:
+    """字段级变更指令"""
+    key: str          # KV key，如 "Aldera.combat"
+    field: str        # 字段名，如 "HP"
+    old_value: str    # 旧值
+    new_value: str    # 新值
+    operation: str = "MOD"  # ADD/MOD/DEL
 
 
 @dataclass
@@ -65,11 +87,13 @@ class ExecutionResult:
     """ExecutorAgent执行结果"""
     task_id: str
     success: bool
-    changes: list[StateChange]
+    field_changes: list[FieldChange]  # 字段级变更指令（给Writer用）
     narration: str  # 执行过程描述
+    execution_context: dict = field(default_factory=dict)  # 执行上下文（给Planner连锁检测）
+    triggered_chains: list[dict] = field(default_factory=list)  # 检测到的连锁触发
 
 
-# ============== 连锁相关 ==============
+
 
 @dataclass
 class ChainTrigger:
@@ -83,7 +107,7 @@ class ChainTrigger:
 # ============== Agent 状态 ==============
 
 class AgentState(TypedDict):
-    """LangGraph Agent 状态 (V3版本)"""
+    """LangGraph Agent 状态 (V4版本 - 简化架构)"""
     messages: Annotated[list[BaseMessage], add_messages]
 
     # 任务相关
@@ -94,19 +118,15 @@ class AgentState(TypedDict):
     execution_result: ExecutionResult | None
 
     # 状态变更
+    applied_changes: list[StateChange]  # Writer应用后的变更
     pending_changes: list[dict]
     committed_changes: list[StateChange]
 
-    # 连锁
-    chain_triggers: list[ChainTrigger]
-    pending_chain_tasks: list[PlannedTask]  # 待审批的连锁任务
-    chain_approval_result: bool | None  # DM审批结果
-
     # DM审批
-    plan_approval_result: bool | None  # Planner任务审批
+    plan_approval_result: bool | None  # 统一的任务审批
 
     # 元数据
-    metadata: dict  # 新增：用于存储额外信息
+    metadata: dict
 
 
 # ============== 辅助类型 ==============

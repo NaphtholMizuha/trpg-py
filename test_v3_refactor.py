@@ -11,6 +11,10 @@ from langchain_core.messages import HumanMessage
 
 load_dotenv()
 
+from src.utils.logging import configure_logging
+# 配置日志只输出 INFO 及以上级别
+configure_logging(debug=False)
+
 from src.workflow import create_workflow
 from src.tools.kv_state import KVStateStore
 
@@ -37,6 +41,8 @@ def run_scenario(workflow, store, user_input: str, thread_id: str):
         "committed_changes": [],
         "chain_triggers": [],
         "pending_chain_tasks": [],
+        "plan_approval_result": None,
+        "metadata": {},
     }
 
     config = {"configurable": {"thread_id": thread_id}}
@@ -63,10 +69,10 @@ def run_scenario(workflow, store, user_input: str, thread_id: str):
                 if printed_execution_id != id(result):
                     print(f"\n⚡ 执行结果:")
                     print(f"   {result.narration}")
-                    if result.changes:
-                        print(f"   状态变更: {len(result.changes)} 项")
-                        for c in result.changes:
-                            print(f"     [{c.operation}] {c.path}")
+                    if result.field_changes:
+                        print(f"   状态变更: {len(result.field_changes)} 项")
+                        for c in result.field_changes:
+                            print(f"     [{c.operation}] {c.key}.{c.field}")
                     printed_execution_id = id(result)
 
             # 打印连锁触发（只打印一次）

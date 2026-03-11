@@ -31,8 +31,8 @@ class KVStateStore:
     [Aldera.abilities] 力量 16 (+3) 豁免+6(熟练) | 敏捷 12 (+1) 豁免+1 | ...
     """
 
-    def __init__(self, filepath: str, persist: bool = False):
-        self.filepath = filepath
+    def __init__(self, filepath: str | None = None, persist: bool = False):
+        self.filepath = filepath or "/tmp/world_state.txt"
         self._data: dict[str, str] = {}
         self.persist = persist  # 是否持久化到文件
         self._load()
@@ -102,6 +102,17 @@ class KVStateStore:
     def get(self, key: str) -> str | None:
         """获取单个 key 的值"""
         return self._data.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        """设置单个 key 的值
+
+        Args:
+            key: 键名
+            value: 完整的 value 值
+        """
+        self._data[key] = value
+        if self.persist:
+            self._save()
 
     def get_by_prefix(self, prefix: str) -> dict[str, str]:
         """获取匹配前缀的所有 key-value"""

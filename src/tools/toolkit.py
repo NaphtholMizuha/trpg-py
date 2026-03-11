@@ -55,6 +55,14 @@ class WriteInput(BaseModel):
     )
 
 
+class WriteFieldsInput(BaseModel):
+    """批量写入字段变更工具输入"""
+    field_changes: list[dict] = Field(
+        description="字段级变更列表。每个变更包含: key, field, old_value, new_value, operation。"
+                    "示例: [{\"key\": \"Aldera.combat\", \"field\": \"HP\", \"old_value\": \"44/44\", \"new_value\": \"38/44\", \"operation\": \"MOD\"}]"
+    )
+
+
 # ============================================
 # 工具实现
 # ============================================
@@ -200,6 +208,74 @@ class WriteTool(BaseTool):
         return f"[{status}] 应用了 {len(changes)} 个变更:\n" + "\n".join(lines)
 
 
+class WriteFieldsTool(BaseTool):
+    """批量写入字段变更工具 - Executor使用
+
+    接收字段级变更列表，自动读取当前值、应用变更、写回KV。
+    相当于将原Writer节点的功能封装为工具。
+    """
+    name: str = "write_fields"
+    description: str = """批量应用字段级变更到KV状态。
+
+使用场景：Executor执行计算后，将生成的字段变更写入状态。
+
+参数格式:
+field_changes: [
+  {"key": "Aldera.combat", "field": "HP", "old_value": "44/44", "new_value": "38/44", "operation": "MOD"},
+  {"key": "Goblin.status", "field": "状态", "old_value": "存活", "new_value": "死亡", "operation": "MOD"}
+]
+
+注意:
+- 工具会自动读取当前完整值，应用字段变更，然后写回
+- 无需手动构建完整的value，只需指定字段变更
+- operation支持: MOD(修改), DEL(删除字段)
+"""
+    args_schema: type[BaseModel] = WriteFieldsInput
+
+    store: KVStateStore = Field(exclude=True)
+
+    def _run(self, field_changes: list[dict]) -> str:
+        from ..utils.kv_patch import KVPatch
+
+        if not field_changes:
+            return "无字段变更需要应用"
+
+        applied_count = 0
+        lines = []
+
+        for fc in field_changes:
+            try:
+                key = fc.get("key", "")
+                field = fc.get("field", "")
+                old_value = fc.get("old_value", "")
+                new_value = fc.get("new_value", "")
+                operation = fc.get("operation", "MOD")
+
+                # 读取当前完整值
+                current_full = self.store.get(key) or ""
+
+                # 应用补丁
+                patch = KVPatch(current_full)
+
+                if operation == "DEL":
+                    patch.remove_field(field)
+                else:
+                    patch.set_field(field, new_value)
+
+                new_full = patch.to_string()
+
+                # 写回 KV
+                self.store.set(key, new_full)
+
+                applied_count += 1
+                lines.append(f"✓ {key}.{field}: {old_value} → {new_value}")
+
+            except Exception as e:
+                lines.append(f"✗ {fc.get('key', '?')}.{fc.get('field', '?')}: 失败 - {e}")
+
+        return f"[成功] 应用了 {applied_count}/{len(field_changes)} 个字段变更:\n" + "\n".join(lines)
+
+
 # ============================================
 # 工具箱
 # ============================================
@@ -232,4 +308,5 @@ class TrpgToolkit(BaseToolkit):
             FetchKeysTool(store=self._store),
             ReadTool(store=self._store),
             WriteTool(store=self._store),
+            WriteFieldsTool(store=self._store),
         ]
