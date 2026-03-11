@@ -4,6 +4,9 @@
 from langchain_core.messages import HumanMessage
 
 from ..types import AgentState, ChainTrigger, PlannedTask, StateChange
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def create_planner_node(planner_agent):
@@ -95,7 +98,7 @@ def create_executor_node(executor_agent):
         pending = []
         for change in result.changes:
             pending.append({
-                "op": change.operation.upper(),
+                "op": change.operation.value if hasattr(change.operation, 'value') else str(change.operation).upper(),
                 "key": change.path,
                 "value": change.new_value
             })

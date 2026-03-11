@@ -3,8 +3,25 @@
 """
 from typing import TypedDict, Annotated, Any
 from dataclasses import dataclass, field
+from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+
+
+# ============== 枚举类型 ==============
+
+class TaskSource(Enum):
+    """任务来源"""
+    DM = "dm"
+    CHAIN = "chain"
+    SYSTEM = "system"
+
+
+class Operation(Enum):
+    """状态变更操作"""
+    ADD = "ADD"
+    MOD = "MOD"
+    DEL = "DEL"
 
 
 # ============== 状态变更 ==============
@@ -15,7 +32,7 @@ class StateChange:
     path: str
     old_value: Any
     new_value: Any
-    operation: str = "set"
+    operation: Operation = Operation.MOD  # 使用枚举
 
 
 @dataclass
@@ -39,6 +56,8 @@ class PlannedTask:
     action: str = ""  # 可选
     context: dict = field(default_factory=dict)  # 执行上下文（保留向后兼容）
     source: str = "dm"  # "dm" | "chain" | "system"，标记任务来源
+    requires_confirmation: bool = False  # 新增：是否需要DM确认
+    priority: int = 0  # 新增：任务优先级
 
 
 @dataclass
@@ -85,6 +104,9 @@ class AgentState(TypedDict):
 
     # DM审批
     plan_approval_result: bool | None  # Planner任务审批
+
+    # 元数据
+    metadata: dict  # 新增：用于存储额外信息
 
 
 # ============== 辅助类型 ==============
