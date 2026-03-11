@@ -47,14 +47,17 @@ def dm_confirm_plan_node(state: AgentState) -> AgentState:
         for k, v in task.context.items():
             print(f"  {k}: {v}")
 
-    # 手动确认
+    # 手动确认（支持直接输入修改建议）
+    print("\n💡 提示: 输入 y 确认，n 拒绝，或直接输入修改建议")
     while True:
-        response = input("\n确认执行此任务? [y/n/e(编辑)]: ").strip().lower()
-        if response in ('y', 'yes'):
+        response = input("> ").strip()
+        lower = response.lower()
+
+        if lower in ('y', 'yes'):
             print("✅ 已确认执行")
             state["plan_approval_result"] = True
             break
-        elif response in ('n', 'no'):
+        elif lower in ('n', 'no'):
             print("❌ 已拒绝执行")
             state["plan_approval_result"] = False
             # 拒绝时从队列中移除该任务
@@ -64,17 +67,13 @@ def dm_confirm_plan_node(state: AgentState) -> AgentState:
             state["task_queue"] = queue
             state["current_task"] = None
             break
-        elif response in ('e', 'edit'):
-            print("\n✏️ 编辑模式 - 输入修改后的任务描述（直接回车保持原样）:")
-            new_desc = input(f"原描述: {task.natural_description}\n新描述: ").strip()
-            if new_desc:
-                task.natural_description = new_desc
-                print(f"✅ 已更新任务描述")
-            print("✅ 已确认执行修改后的任务")
+        elif response:  # 其他输入视为修改建议
+            task.natural_description = response
+            print(f"✅ 已采纳修改建议并确认执行")
             state["plan_approval_result"] = True
             break
         else:
-            print("请输入 y(确认)、n(拒绝) 或 e(编辑)")
+            print("请输入 y(确认)、n(拒绝) 或修改建议")
 
     return state
 
@@ -148,27 +147,29 @@ def dm_confirm_chain_node(state: AgentState) -> AgentState:
         print(f"    目标: {task.target}")
         print(f"    动作: {task.action}")
 
-    # 手动确认（支持单个任务编辑）
+    # 手动确认（支持直接输入修改建议）
     approved_tasks = []
     for task in pending_tasks:
+        print(f"\n  任务: {task.natural_description[:60]}...")
+        print("  💡 y 确认 / n 拒绝 / 或直接输入修改建议")
         while True:
-            print(f"\n  任务: {task.natural_description[:60]}...")
-            response = input("  确认此连锁任务? [y/n/e(编辑)]: ").strip().lower()
-            if response in ('y', 'yes'):
+            response = input("  > ").strip()
+            lower = response.lower()
+
+            if lower in ('y', 'yes'):
                 approved_tasks.append(task)
+                print("  ✅ 已确认")
                 break
-            elif response in ('n', 'no'):
-                print("  ❌ 已拒绝此任务")
+            elif lower in ('n', 'no'):
+                print("  ❌ 已拒绝")
                 break
-            elif response in ('e', 'edit'):
-                print(f"  ✏️ 编辑模式")
-                new_desc = input(f"  新描述: ").strip()
-                if new_desc:
-                    task.natural_description = new_desc
+            elif response:  # 其他输入视为修改建议
+                task.natural_description = response
                 approved_tasks.append(task)
+                print(f"  ✅ 已修改并确认")
                 break
             else:
-                print("  请输入 y(确认)、n(拒绝) 或 e(编辑)")
+                print("  请输入 y(确认)、n(拒绝) 或修改建议")
 
     if approved_tasks:
         print(f"\n✅ 已确认 {len(approved_tasks)}/{len(pending_tasks)} 个连锁任务")
