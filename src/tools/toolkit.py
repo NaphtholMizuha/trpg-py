@@ -245,8 +245,20 @@ field_changes: [
 
         for fc in field_changes:
             try:
+                # 支持 key+field 或 path 两种格式
                 key = fc.get("key", "")
                 field = fc.get("field", "")
+                path = fc.get("path", "")
+
+                # 如果提供了 path，从中提取 key 和 field
+                if path and not key:
+                    parts = path.rsplit(".", 1)
+                    if len(parts) == 2:
+                        key, field = parts
+                    else:
+                        key = path
+                        field = ""
+
                 old_value = fc.get("old_value", "")
                 new_value = fc.get("new_value", "")
                 operation = fc.get("operation", "MOD")
@@ -271,7 +283,9 @@ field_changes: [
                 lines.append(f"✓ {key}.{field}: {old_value} → {new_value}")
 
             except Exception as e:
-                lines.append(f"✗ {fc.get('key', '?')}.{fc.get('field', '?')}: 失败 - {e}")
+                err_key = key or fc.get('key', '?') or fc.get('path', '?')
+                err_field = field or fc.get('field', '?')
+                lines.append(f"✗ {err_key}.{err_field}: 失败 - {e}")
 
         return f"[成功] 应用了 {applied_count}/{len(field_changes)} 个字段变更:\n" + "\n".join(lines)
 

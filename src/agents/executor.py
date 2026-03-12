@@ -17,7 +17,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from ..config import EXECUTOR_SYSTEM_PROMPT
-from ..types import PlannedTask, ExecutionResult, FieldChange
+from ..types import PlannedTask, ExecutionResult, StateChange, Operation
 from ..utils.logging import get_logger
 from .base import BaseAgent
 
@@ -82,17 +82,16 @@ class ExecutorAgent(BaseAgent):
         4. 检测连锁条件
         5. 返回执行结果
         """
-        logger.info("ExecutorAgent 执行任务", task_id=task.task_id, description=task.natural_description)
+        logger.info("ExecutorAgent 执行任务", task_id=task.task_id, description=task.description)
 
         # 使用模板构建任务提示
         task_prompt = TASK_TEMPLATE.format(
             task_id=task.task_id,
-            natural_description=task.natural_description,
+            description=task.description,
             actor=task.actor,
             target=task.target,
-            action=task.action,
             dm_notes=task.dm_notes or "无",
-            raw_description=task.context.get('raw_description', '无详细描述')
+            context=task.context
         )
 
         # 构建对话历史
@@ -152,12 +151,24 @@ class ExecutorAgent(BaseAgent):
             field_changes = []
             changes_data = data.get("field_changes") or data.get("changes", [])
             for c in changes_data:
-                field_changes.append(FieldChange(
-                    key=c.get("key", c.get("path", "")),
-                    field=c.get("field", "value"),
-                    old_value=str(c.get("old_value", "")),
-                    new_value=str(c.get("new_value", "")),
-                    operation=c.get("operation", "MOD")
+                # 构建path：如果key和field都有，组合成 "key.field"
+                key = c.get("key", c.get("path", ""))
+                field = c.get("field", "")
+                path = f"{key}.{field}" if field and key else (key or field or "unknown")
+
+                # 解析operation
+                op_str = c.get("operation", "MOD")
+                try:
+                    operation = Operation(op_str)
+                except ValueError:
+                    operation = Operation.MOD
+
+                field_changes.append(StateChange(
+                    path=path,
+                    old_value=c.get("old_value", ""),
+                    new_value=c.get("new_value", ""),
+                    operation=operation,
+                    source=task.task_id
                 ))
 
             result = ExecutionResult(

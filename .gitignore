@@ -10,3 +10,4 @@ data/
 .venv
 data/dnd-5e-srd-markdown
 .env
+.claude

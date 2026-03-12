@@ -1,14 +1,13 @@
 请执行以下任务:
 
 任务ID: {task_id}
-任务描述: {natural_description}
+任务描述: {description}
 行动者: {actor}
 目标: {target}
-动作: {action}
 DM批注: {dm_notes}
 
 任务详情:
-{raw_description}
+{context}
 
 工作流程：
 1. 从task.context获取相关状态信息（Planner已提供）
@@ -31,10 +30,14 @@ DM批注: {dm_notes}
 
 输出JSON格式示例：
 ```json
-{{"success": true,
-  "narration": "攻击命中，造成10点伤害...",
-  "field_changes": [{{"key": "Goblin.combat", "field": "HP", "old_value": "10/10", "new_value": "0/10", "operation": "MOD"}}],
-  "triggered_chains": [{{"type": "death", "description": "哥布林HP降至0，触发死亡连锁", "source_key": "Goblin.combat", "priority": 100}}]
-}}
+{
+  "success": true,
+  "narration": "攻击命中，造成10点伤害，哥布林HP从10降至0",
+  "field_changes": [
+    {"path": "Goblin.combat.HP", "old_value": "10/10", "new_value": "0/10", "operation": "MOD"}
+  ],
+  "triggered_chains": [
+    {"type": "death", "description": "哥布林HP降至0，触发死亡连锁", "source_key": "Goblin.combat"}
+  ]
+}
 ```
-注意：外层花括号是JSON语法，实际输出时不需要双花括号。

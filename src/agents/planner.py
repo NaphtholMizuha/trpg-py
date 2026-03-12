@@ -5,14 +5,13 @@ PlannerAgent - 规划Agent
 使用ReAct模式，通过tools决定如何执行
 """
 import uuid
-import re
 from pathlib import Path
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.tools import BaseTool
 
 from ..config import PLANNER_SYSTEM_PROMPT
-from ..types import PlannedTask, PotentialChain
+from ..types import PlannedTask
 from ..utils.logging import get_logger
 from .base import BaseAgent
 
@@ -105,14 +104,6 @@ class PlannerAgent(BaseAgent):
             description = original_input
             actor = "未知"
             target = None
-            action = ""
-            actor_status = ""
-            target_status = ""
-            context: dict = {"raw_description": cleaned}
-            potential_chains: list[PotentialChain] = []
-
-            # 解析连锁相关标记
-            in_chain_section = False
 
             for line in lines:
                 line = line.strip()
@@ -124,74 +115,30 @@ class PlannerAgent(BaseAgent):
                     actor = line.split(":", 1)[1].strip()
                 elif line.startswith("目标:"):
                     target = line.split(":", 1)[1].strip()
-                elif line.startswith("动作:"):
-                    action = line.split(":", 1)[1].strip()
-                elif line.startswith("- 行动者状态:"):
-                    parts = line.split(":", 1)
-                    if len(parts) > 1:
-                        status_value = parts[1].strip()
-                        actor_status = status_value
-                        # 提取key（状态值的第一部分）
-                        key = status_value.split()[0] if status_value else ""
-                        if key:
-                            context["actor_key"] = key
-                elif line.startswith("- 目标状态:"):
-                    parts = line.split(":", 1)
-                    if len(parts) > 1:
-                        status_value = parts[1].strip()
-                        target_status = status_value
-                        # 提取key（状态值的第一部分）
-                        key = status_value.split()[0] if status_value else ""
-                        if key:
-                            context["target_key"] = key
-                elif "可能触发的连锁" in line:
-                    in_chain_section = True
-                    continue
-                elif in_chain_section and line.startswith("==="):
-                    in_chain_section = False
-                elif in_chain_section and line.startswith("-") and "[条件:" in line and "[类型:" in line:
-                    # 解析连锁条目: - [条件: xxx] [类型: yyy] 描述
-                    chain = self._parse_potential_chain_line(line)
-                    if chain:
-                        potential_chains.append(chain)
 
-            # 如果没有提取到描述，使用原始输入的前缀
+            # 如果没有提取到描述，使用原始输入
             if description == original_input and len(lines) > 0:
-                # 取第一行非空且不是字段定义的行作为描述
                 for line in lines:
                     line_stripped = line.strip()
-                    if line_stripped and not line_stripped.startswith(("任务", "行动者", "目标", "动作", "执行", "- ", "* ")):
+                    if line_stripped and not line_stripped.startswith(("任务", "行动者", "目标", "===", "- ", "* ")):
                         description = line_stripped
                         break
 
-            # 确保 context 包含足够的信息供 Executor 使用
-            context.update({
-                "actor": actor,
-                "target": target,
-                "action": action,
-                "actor_status": actor_status,
-                "target_status": target_status
-            })
-
             task = PlannedTask(
                 task_id=task_id,
-                natural_description=description,
+                description=description,
+                context=cleaned,
                 actor=actor,
                 target=target,
-                action=action,
-                context=context,
-                source="dm",
-                potential_chains=potential_chains
+                source="dm"
             )
 
             logger.info(
                 "生成任务",
                 task_id=task.task_id,
-                description=task.natural_description,
+                description=task.description,
                 actor=task.actor,
-                target=task.target,
-                action=task.action,
-                potential_chains=len(task.potential_chains)
+                target=task.target
             )
 
             return task
@@ -201,132 +148,12 @@ class PlannerAgent(BaseAgent):
             # 失败时使用原始输入创建基本任务
             return PlannedTask(
                 task_id=f"task_{uuid.uuid4().hex[:8]}",
-                natural_description=original_input,
+                description=original_input,
+                context=content if content else "",
                 actor="未知",
-                context={"raw_description": content},
                 source="dm"
             )
 
-    def _parse_potential_chain_line(self, line: str) -> PotentialChain | None:
-        """解析连锁条目行
-        格式: - [条件: xxx] [类型: yyy] 描述
-        """
-        try:
-            # 移除开头的 "- "
-            line = line[2:].strip() if line.startswith("-") else line.strip()
-
-            # 提取条件
-            condition_match = re.search(r'\[条件:\s*([^\]]+)\]', line)
-            condition = condition_match.group(1).strip() if condition_match else ""
-
-            # 提取类型
-            type_match = re.search(r'\[类型:\s*([^\]]+)\]', line)
-            chain_type = type_match.group(1).strip() if type_match else "unknown"
-
-            # 提取描述（类型标记之后的部分）
-            description = line
-            if type_match:
-                # 找到类型标记的结束位置
-                end_pos = type_match.end()
-                description = line[end_pos:].strip()
-
-            # 过滤掉"无"或空条目
-            if not condition or condition == "无" or chain_type == "无":
-                return None
-
-            return PotentialChain(
-                condition=condition,
-                chain_type=chain_type,
-                description=description
-            )
-        except Exception as e:
-            logger.warning("解析连锁条目失败", line=line, error=str(e))
-            return None
-
-    def plan_chain_task(self, chain_trigger: dict, state: dict) -> PlannedTask | None:
-        """根据连锁触发信息生成连锁任务
-
-        Args:
-            chain_trigger: 连锁触发信息，包含 type, description, source_key 等
-            state: 当前状态
-
-        Returns:
-            生成的连锁任务，如果无法生成则返回 None
-        """
-        chain_type = chain_trigger.get("type", "unknown")
-        description = chain_trigger.get("description", "")
-        source_key = chain_trigger.get("source_key", "")
-
-        logger.info("生成连锁任务", chain_type=chain_type, description=description)
-
-        # 根据连锁类型生成任务
-        task_id = f"chain_{uuid.uuid4().hex[:8]}"
-
-        if chain_type == "death":
-            # 死亡连锁：进行死亡豁免检定
-            entity = source_key.split(".")[0] if "." in source_key else source_key
-            return PlannedTask(
-                task_id=task_id,
-                natural_description=f"【连锁】{entity} HP降至0，需要进行死亡豁免检定",
-                actor=entity,
-                target=entity,
-                action="死亡豁免检定",
-                context={
-                    "chain_type": chain_type,
-                    "source_key": source_key,
-                    "trigger_description": description
-                },
-                source="chain",
-                requires_confirmation=True
-            )
-        elif chain_type == "explosion":
-            # 爆炸连锁
-            entity = source_key.split(".")[0] if "." in source_key else source_key
-            return PlannedTask(
-                task_id=task_id,
-                natural_description=f"【连锁】{entity} 触发爆炸，计算爆炸伤害",
-                actor=entity,
-                target="周围10尺内所有生物",
-                action="爆炸伤害",
-                context={
-                    "chain_type": chain_type,
-                    "source_key": source_key,
-                    "trigger_description": description,
-                    "damage_dice": "3d6"  # 默认伤害骰
-                },
-                source="chain",
-                requires_confirmation=True
-            )
-        elif chain_type == "collapse":
-            # 坍塌连锁
-            entity = source_key.split(".")[0] if "." in source_key else source_key
-            return PlannedTask(
-                task_id=task_id,
-                natural_description=f"【连锁】{entity} 结构破坏，计算坍塌伤害",
-                actor=entity,
-                target="下方/周围生物",
-                action="坍塌伤害",
-                context={
-                    "chain_type": chain_type,
-                    "source_key": source_key,
-                    "trigger_description": description
-                },
-                source="chain",
-                requires_confirmation=True
-            )
-        else:
-            # 其他类型的连锁，使用描述生成通用任务
-            return PlannedTask(
-                task_id=task_id,
-                natural_description=f"【连锁】{description}",
-                actor="系统",
-                target=source_key,
-                action="连锁处理",
-                context={
-                    "chain_type": chain_type,
-                    "source_key": source_key,
-                    "trigger_description": description
-                },
-                source="chain",
-                requires_confirmation=True
-            )
+    # Note: plan_chain_task 方法已删除
+    # 连锁任务现在通过 plan() 统一处理
+    # dm_confirm_chain 将连锁触发转换为 HumanMessage，planner 像处理 DM 输入一样获取完整上下文
