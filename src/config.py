@@ -28,6 +28,7 @@ class AppConfig:
     llm_model: str = "gpt-4o"
     llm_api_key: Optional[str] = None
     llm_base_url: Optional[str] = None
+    llm_provider: str = "openai"  # 支持: openai, deepseek, minimax
 
     # RAG 配置
     qdrant_url: str = "http://localhost:6333"
@@ -51,6 +52,40 @@ class AppConfig:
             llm_model=os.getenv("LLM_MODEL", "gpt-4o"),
             llm_api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
             llm_base_url=os.getenv("DEEPSEEK_BASE_URL"),
+            llm_provider=os.getenv("LLM_PROVIDER", "openai"),
             siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY"),
             persist_state=os.getenv("PERSIST_STATE", "false").lower() == "true",
         )
+
+    @classmethod
+    def from_provider(cls, provider: str = "deepseek") -> "AppConfig":
+        """从提供商名称创建配置
+
+        Args:
+            provider: 模型提供商，支持 "deepseek", "minimax", "openai"
+        """
+        provider = provider.lower()
+
+        if provider == "deepseek":
+            return cls(
+                llm_model="deepseek-chat",
+                llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
+                llm_base_url=os.getenv("DEEPSEEK_BASE_URL"),
+                llm_provider="deepseek",
+            )
+        elif provider == "minimax":
+            return cls(
+                llm_model="MiniMax-M2.5-highspeed",  # minimax-m2.5 模型名称
+                llm_api_key=os.getenv("MINIMAX_API_KEY"),
+                llm_base_url="https://api.minimaxi.com/v1",
+                llm_provider="minimax",
+            )
+        elif provider == "openai":
+            return cls(
+                llm_model=os.getenv("LLM_MODEL", "gpt-4o"),
+                llm_api_key=os.getenv("OPENAI_API_KEY"),
+                llm_base_url=os.getenv("OPENAI_BASE_URL"),
+                llm_provider="openai",
+            )
+        else:
+            raise ValueError(f"不支持的提供商: {provider}，支持: deepseek, minimax, openai")

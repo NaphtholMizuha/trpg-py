@@ -7,8 +7,17 @@ V7 工作流测试 (队列管理 + 事件驱动)
 3. 艾尔德拉用圣火术点燃炸药桶
 
 使用方式：
-  python test_v3_refactor.py           # 自动确认模式（默认）
-  python test_v3_refactor.py --manual  # 手动审批模式
+  python test.py                            # 默认使用 deepseek，自动确认模式
+  python test.py --manual                   # 手动审批模式
+  python test.py --provider minimax         # 使用 minimax-m2.5
+  python test.py --provider openai          # 使用 openai
+
+环境变量配置：
+  DEEPSEEK_API_KEY      - DeepSeek API 密钥
+  DEEPSEEK_BASE_URL     - DeepSeek API 地址（可选）
+  MINIMAX_API_KEY       - MiniMax API 密钥
+  OPENAI_API_KEY        - OpenAI API 密钥
+  OPENAI_BASE_URL       - OpenAI API 地址（可选）
 """
 import os
 import argparse
@@ -110,6 +119,13 @@ def main():
         action="store_true",
         help="启用手动审批模式（默认自动确认）"
     )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        choices=["deepseek", "minimax", "openai"],
+        default="deepseek",
+        help="选择LLM提供商（默认: deepseek）"
+    )
     args = parser.parse_args()
 
     # 只有在没有 --manual 参数时才设置自动确认
@@ -120,33 +136,43 @@ def main():
         print("👤 手动审批模式")
 
     print_header("TRPG V7 工作流测试 (队列管理 + 事件驱动)")
+    print(f"   LLM 提供商: {args.provider}")
+
+    # 根据提供商加载配置
+    from src.config import AppConfig
+    config = AppConfig.from_provider(args.provider)
 
     # 加载世界状态
     print("\n📂 加载世界状态...")
     store = KVStateStore("data/world_state.txt")
     print(f"   加载了 {len(store.get_keys())} 个状态键")
 
-    # 创建工作流
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    base_url = os.getenv("DEEPSEEK_BASE_URL")
-
-    if not api_key:
-        print("\n⚠️  未配置 DEEPSEEK_API_KEY，将使用 fallback 模式")
+    # 检查API配置
+    if not config.llm_api_key:
+        provider_env = {
+            "deepseek": "DEEPSEEK_API_KEY",
+            "minimax": "MINIMAX_API_KEY",
+            "openai": "OPENAI_API_KEY"
+        }
+        env_var = provider_env.get(args.provider, "API_KEY")
+        print(f"\n⚠️  未配置 {env_var}，将使用 fallback 模式")
 
     print("\n🔧 创建工作流...")
     workflow, store = create_workflow(
         world_state_path="data/world_state.txt",
-        model="deepseek-chat",
-        api_key=api_key,
-        base_url=base_url
+        model=config.llm_model,
+        api_key=config.llm_api_key,
+        base_url=config.llm_base_url
     )
-    print("   工作流创建成功")
+    print(f"   工作流创建成功 (模型: {config.llm_model})")
 
     # 测试场景
     scenarios = [
         # "艾尔德拉用长剑攻击哥布林",
         # "哥布林用弯刀攻击尼古拉斯",
-        "艾尔德拉用圣火术点燃炸药桶",
+        "马利克发动一环魔法飞弹，3发全部攻击艾尔德拉",
+        # "哥布林用弯刀攻击艾尔德拉",
+        
     ]
 
     for i, scenario in enumerate(scenarios, 1):

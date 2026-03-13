@@ -27,17 +27,22 @@ DM批注: {dm_notes}
   * 检查状态变化是否符合连锁条件
   * 考虑DM批注：如果DM批注明确说明不需要某连锁（如"不需要死亡豁免"），则不触发
   * 如果无连锁，triggered_chains设为空数组 []
+- **反应检查 (Reaction Check)**: 在执行攻击/伤害前，检查目标是否可能使用反应法术
+  * 如果目标有反应动作可用，且准备了可能改变结果的反应法术（如护盾术），则暂停伤害结算
+  * 此时 field_changes 设为空数组（暂不扣血），在 triggered_chains 中添加 type="reaction_check"
+  * 支持的反应法术：护盾术(Shield)-可完全抵挡魔法飞弹、+5AC可能改变命中结果
+  * 示例：魔法飞弹攻击有护盾术的艾尔德拉 → 触发反应检查，询问是否施放护盾术
 
 输出JSON格式示例：
 ```json
-{
+{{
   "success": true,
   "narration": "攻击命中，造成10点伤害，哥布林HP从10降至0",
   "field_changes": [
-    {"path": "Goblin.combat.HP", "old_value": "10/10", "new_value": "0/10", "operation": "MOD"}
+    {{"path": "Goblin.combat.HP", "old_value": "10/10", "new_value": "0/10", "operation": "MOD"}}
   ],
   "triggered_chains": [
-    {"type": "death", "description": "哥布林HP降至0，触发死亡连锁", "source_key": "Goblin.combat"}
+    {{"type": "death", "description": "哥布林HP降至0，触发死亡连锁", "source_key": "Goblin.combat"}}
   ]
-}
+}}
 ```

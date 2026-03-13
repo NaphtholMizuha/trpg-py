@@ -122,7 +122,15 @@ def create_planner_node(planner_agent):
         elif isinstance(current_event, ChainRejected):
             # 连锁被拒绝，继续出队下一个任务
             print("❌ 连锁已被忽略")
-            _dequeue_next_task(state)
+            has_more = _dequeue_next_task(state)
+            if not has_more:
+                # 所有任务处理完成，标记最新消息为已处理
+                messages = state.get("messages", [])
+                if messages:
+                    metadata = state.get("metadata", {})
+                    metadata["processed_message_idx"] = len(messages) - 1
+                    state["metadata"] = metadata
+                    print("⏭️  标记最新消息为已处理")
 
         elif isinstance(current_event, ExecutionCompleted):
             # 执行完成，记录变更
@@ -140,6 +148,13 @@ def create_planner_node(planner_agent):
             has_more = _dequeue_next_task(state)
             if not has_more:
                 print("✅ 所有任务执行完成")
+                # 标记最新消息为已处理，防止重复触发
+                messages = state.get("messages", [])
+                if messages:
+                    metadata = state.get("metadata", {})
+                    metadata["processed_message_idx"] = len(messages) - 1
+                    state["metadata"] = metadata
+                    print("⏭️  标记最新消息为已处理")
 
         elif isinstance(current_event, TaskApproved):
             # TaskApproved 不应该直接到planner，应该在dm_confirm_plan后去executor
@@ -154,8 +169,13 @@ def create_planner_node(planner_agent):
             if isinstance(last_message, HumanMessage):
                 user_input = last_message.content
 
-                # 跳过已处理的消息标记
-                if user_input.startswith("【已处理:"):
+                # 检查最新消息是否已处理（通过 metadata 索引）
+                messages = state.get("messages", [])
+                metadata = state.get("metadata", {})
+                last_idx = len(messages) - 1 if messages else -1
+                processed_idx = metadata.get("processed_message_idx", -1)
+
+                if last_idx == processed_idx:
                     print(f"⏭️  跳过已处理的消息")
                     # 尝试出队下一个任务
                     _dequeue_next_task(state)
@@ -234,6 +254,13 @@ def dm_confirm_plan_node(state: AgentState, auto_confirm: bool = False) -> Agent
             has_more = _dequeue_next_task(state)
             if not has_more:
                 print("✅ 所有任务处理完成")
+                # 标记最新消息为已处理，防止重复触发
+                messages = state.get("messages", [])
+                if messages:
+                    metadata = state.get("metadata", {})
+                    metadata["processed_message_idx"] = len(messages) - 1
+                    state["metadata"] = metadata
+                    print("⏭️  标记最新消息为已处理")
             break
         elif response:  # 其他输入视为修改建议
             task.dm_notes = response
