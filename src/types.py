@@ -63,8 +63,9 @@ class ExecutionCompleted(Event):
     task_id: str
     success: bool
     narration: str
-    changes: list["StateChange"]  # 状态变更列表
+    changes: list["StateChange"]  # 已应用的状态变更列表
     triggered_chains: list[dict] = field(default_factory=list)
+    pending_changes: list["StateChange"] = field(default_factory=list)  # 待确认的变更（用于反应检查场景）
 
 
 @dataclass
@@ -107,6 +108,15 @@ class StateChange:
 
 
 @dataclass
+class PotentialReaction:
+    """Planner预判的可能反应（由DM在执行时决定是否触发）"""
+    condition: str       # 触发条件描述，如"目标反应可用且有护盾术"
+    actor: str          # 反应角色
+    spell: str | None   # 可能的反应法术
+    description: str    # 描述，如"艾尔德拉可用护盾术抵挡魔法飞弹"
+
+
+@dataclass
 class PlannedTask:
     """统一任务描述 - 自然语言为主，结构化字段可选"""
     task_id: str
@@ -116,6 +126,7 @@ class PlannedTask:
     target: str | None = None  # 仅用于快速筛选/显示
     source: str = "dm"  # "dm" | "chain" | "system"
     dm_notes: str | None = None  # DM审批时的批注
+    potential_reactions: list[PotentialReaction] = field(default_factory=list)  # Planner预判的可能反应
 
 
 @dataclass

@@ -171,12 +171,33 @@ class ExecutorAgent(BaseAgent):
                     source=task.task_id
                 ))
 
+            # 解析 pending_changes（反应检查场景下的待处理变更）
+            pending_changes = []
+            pending_data = data.get("pending_changes", [])
+            for c in pending_data:
+                key = c.get("key", c.get("path", ""))
+                field = c.get("field", "")
+                path = f"{key}.{field}" if field and key else (key or field or "unknown")
+                op_str = c.get("operation", "MOD")
+                try:
+                    operation = Operation(op_str)
+                except ValueError:
+                    operation = Operation.MOD
+                pending_changes.append(StateChange(
+                    path=path,
+                    old_value=c.get("old_value", ""),
+                    new_value=c.get("new_value", ""),
+                    operation=operation,
+                    source=task.task_id
+                ))
+
             result = ExecutionResult(
                 task_id=task.task_id,
                 success=data.get("success", True),
                 field_changes=field_changes,
                 narration=data.get("narration", "执行完成"),
-                triggered_chains=data.get("triggered_chains", [])
+                triggered_chains=data.get("triggered_chains", []),
+                execution_context={"pending_changes": pending_changes} if pending_changes else {}
             )
 
             logger.info(

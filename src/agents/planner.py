@@ -11,7 +11,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.tools import BaseTool
 
 from ..config import PLANNER_SYSTEM_PROMPT
-from ..types import PlannedTask
+from ..types import PlannedTask, PotentialReaction
 from ..utils.logging import get_logger
 from .base import BaseAgent
 
@@ -104,9 +104,27 @@ class PlannerAgent(BaseAgent):
             description = original_input
             actor = "未知"
             target = None
+            potential_reactions: list[PotentialReaction] = []
 
+            in_reaction_section = False
             for line in lines:
                 line = line.strip()
+
+                # 检测进入/离开"可能触发的反应"部分
+                if "可能触发的反应" in line and "===" in line:
+                    in_reaction_section = True
+                    continue
+                if in_reaction_section and line.startswith("==="):
+                    in_reaction_section = False
+                    continue
+
+                # 解析反应条目
+                if in_reaction_section and line.startswith("- [条件:"):
+                    reaction = self._parse_reaction_line(line)
+                    if reaction:
+                        potential_reactions.append(reaction)
+
+                # 提取基本信息
                 if line.startswith("任务ID:") or line.startswith("任务编号:"):
                     task_id = line.split(":", 1)[1].strip()
                 elif line.startswith("任务描述:") or line.startswith("描述:"):
@@ -130,7 +148,8 @@ class PlannerAgent(BaseAgent):
                 context=cleaned,
                 actor=actor,
                 target=target,
-                source="dm"
+                source="dm",
+                potential_reactions=potential_reactions
             )
 
             logger.info(
@@ -138,7 +157,8 @@ class PlannerAgent(BaseAgent):
                 task_id=task.task_id,
                 description=task.description,
                 actor=task.actor,
-                target=task.target
+                target=task.target,
+                reaction_count=len(potential_reactions)
             )
 
             return task
@@ -153,6 +173,57 @@ class PlannerAgent(BaseAgent):
                 actor="未知",
                 source="dm"
             )
+
+    def _parse_reaction_line(self, line: str) -> PotentialReaction | None:
+        """解析反应条目行
+
+        格式: - [条件: 具体条件] [角色: 反应角色] [法术: 可能的反应法术] 反应描述
+        示例: - [条件: 目标反应可用且准备有护盾术] [角色: 艾尔德拉] [法术: 护盾术] 可用护盾术免疫魔法飞弹
+        """
+        try:
+            # 移除开头的 "- "
+            line = line[2:].strip() if line.startswith("- ") else line.strip()
+
+            # 解析 [条件: ...]
+            condition = ""
+            actor = ""
+            spell = None
+            description = ""
+
+            # 提取各部分
+            import re
+            condition_match = re.search(r'\[条件:\s*([^\]]+)\]', line)
+            actor_match = re.search(r'\[角色:\s*([^\]]+)\]', line)
+            spell_match = re.search(r'\[法术:\s*([^\]]+)\]', line)
+
+            if condition_match:
+                condition = condition_match.group(1).strip()
+            if actor_match:
+                actor = actor_match.group(1).strip()
+            if spell_match:
+                spell = spell_match.group(1).strip()
+                if spell == "无":
+                    spell = None
+
+            # 描述是最后一个 ] 之后的内容
+            last_bracket = line.rfind(']')
+            if last_bracket > 0:
+                description = line[last_bracket + 1:].strip()
+
+            # 如果条件是无，则返回 None
+            if condition == "无":
+                return None
+
+            return PotentialReaction(
+                condition=condition,
+                actor=actor,
+                spell=spell,
+                description=description
+            )
+
+        except Exception as e:
+            logger.warning("解析反应条目失败", line=line[:100], error=str(e))
+            return None
 
     # Note: plan_chain_task 方法已删除
     # 连锁任务现在通过 plan() 统一处理
