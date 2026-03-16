@@ -2,13 +2,14 @@
 Agents - 智能体层 (V3版本)
 """
 from .base import BaseAgent
-from .planner import PlannerAgent
+from .deep_planner import DeepPlannerAgent, create_deep_planner_agent
 from .executor import ExecutorAgent
 from .exceptions import AgentError, ParseError, ToolExecutionError, LLMError
 
 __all__ = [
     "BaseAgent",
-    "PlannerAgent",
+    "DeepPlannerAgent",
+    "create_deep_planner_agent",
     "ExecutorAgent",
     "AgentError",
     "ParseError",

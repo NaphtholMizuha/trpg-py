@@ -1,32 +1,35 @@
 """
-LangGraph工作流组装 - V8版本 (统一DM决策 + 队列管理)
+LangGraph工作流组装 - 扁平化队列架构
 
-流程:
-planner -> dm_decision -> executor -> dm_decision -> planner
-              ↓ 拒绝/批准              ↓ 无连锁/有连锁
-           (自动出队下一个)          (连锁插队头部优先)
+核心流程:
+planner -> dm_decision -> resolution_builder -> decision_point_check -> resolution_runner -> planner
+              ↓ 拒绝/完成
+           planner (出队下一个)
 
-V8架构特点:
-1. 统一DM决策节点：任务审批和连锁审批合并
-2. 队列管理：入队尾部、插队头部、出队
-3. 事件驱动状态流转
-4. Planner预判反应，Executor验证，DM决策
+架构特点:
+1. 所有任务统一使用队列管理
+2. 响应任务通过插队到队首实现优先级
+3. 连锁任务执行后插队，确保尽快处理
+4. 使用 interrupt 替代 input() 阻塞调用
+5. 使用 Command(goto=...) 控制节点跳转
 """
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from ..types import AgentState
-from ..agents import PlannerAgent, ExecutorAgent
+from ..types import AgentState, StateChange, Operation, DecisionPoint, PlannedTask, ExecutionState
+from ..agents import create_deep_planner_agent, ExecutorAgent
 from ..tools.toolkit import TrpgToolkit
 from ..config import AppConfig
 
 from .nodes import (
     create_planner_node,
-    create_executor_node,
     create_dm_decision_node,
-    route_after_planner,
-    route_after_dm_decision,
-    route_after_executor,
+    create_context_builder_node,
+    create_resolution_builder_node,
+    create_decision_point_node,
+    create_resolution_runner_node,
+    create_executor_node,
 )
 
 
@@ -38,16 +41,21 @@ def create_workflow(
     base_url: str | None = None
 ):
     """
-    创建V8工作流 (统一DM决策 + 队列管理)
+    创建扁平化队列工作流
 
     核心流程:
-    - planner: 入队/插队任务，出队生成 TaskCreated
-    - dm_decision: 统一审批节点，处理任务审批和连锁审批
-    - executor: 执行任务，生成 ExecutionCompleted
-    - (回到planner): 处理完成事件，出队下一个任务
+    - planner: 生成任务并入队，出队设置 _current_task
+    - dm_decision: 统一审批节点，处理任务审批
+    - context_builder: 注入 executor 可用的最小状态快照
+    - resolution_builder: 构建当前任务的阶段化结算计划
+    - decision_point_check: 在当前阶段检查决策窗口
+    - resolution_runner: 推进结果阶段并在结束时生成连锁
+    - executor: 执行派生的响应任务/世界编辑任务
 
-    反应机制:
-    - Planner预判可能反应 -> Executor验证条件 -> DM决策是否触发
+    扁平化架构:
+    - 所有任务统一使用队列 (FIFO) 管理
+    - 响应任务通过插队到队首实现优先级
+    - 连锁任务通过插队到队首实现“立即处理”
     """
     # 兼容性处理
     if config is None:
@@ -67,11 +75,12 @@ def create_workflow(
     tool_map = {t.name: t for t in tools}
 
     # Agent初始化
-    planner_agent = PlannerAgent(
+    planner_agent = create_deep_planner_agent(
         model=config.llm_model,
         api_key=config.llm_api_key,
         base_url=config.llm_base_url,
-        tools=[tool_map["fetch_keys"], tool_map["read"], tool_map["search"]]
+        tools=[tool_map["fetch_keys"], tool_map["read"], tool_map["search"]],
+        skill_names=None  # 加载所有 skills
     )
     executor_agent = ExecutorAgent(
         model=config.llm_model,
@@ -86,43 +95,24 @@ def create_workflow(
     # 添加节点
     workflow.add_node("planner", create_planner_node(planner_agent))
     workflow.add_node("dm_decision", create_dm_decision_node())
+    workflow.add_node("context_builder", create_context_builder_node(toolkit.store))
+    workflow.add_node("resolution_builder", create_resolution_builder_node(executor_agent))
+    workflow.add_node("decision_point_check", create_decision_point_node())
+    workflow.add_node("resolution_runner", create_resolution_runner_node())
     workflow.add_node("executor", create_executor_node(executor_agent))
 
     # 设置入口
     workflow.set_entry_point("planner")
 
-    # === 条件边定义 ===
-
-    # planner -> dm_decision (有TaskCreated) / END (无)
-    workflow.add_conditional_edges(
-        "planner",
-        route_after_planner,
-        {
-            "dm_decision": "dm_decision",
-            "end": END,
-        }
-    )
-
-    # dm_decision -> executor (任务审批通过) / planner (其他情况)
-    workflow.add_conditional_edges(
-        "dm_decision",
-        route_after_dm_decision,
-        {
-            "executor": "executor",
-            "planner": "planner",
-        }
-    )
-
-    # executor -> dm_decision (有连锁) / planner (无连锁)
-    workflow.add_conditional_edges(
-        "executor",
-        route_after_executor,
-        {
-            "dm_decision": "dm_decision",
-            "planner": "planner",
-        }
-    )
-
     # 编译
-    memory = MemorySaver()
+    serde = JsonPlusSerializer(
+        allowed_msgpack_modules=[
+            StateChange,
+            Operation,
+            DecisionPoint,
+            PlannedTask,
+            ExecutionState,
+        ]
+    )
+    memory = MemorySaver(serde=serde)
     return workflow.compile(checkpointer=memory), toolkit.store

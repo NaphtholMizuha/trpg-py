@@ -1812,7 +1812,9 @@ dependencies = [
     { name = "markdownify" },
     { name = "python-dotenv" },
     { name = "qdrant-client" },
+    { name = "rich" },
     { name = "tomli-w" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -1839,7 +1841,9 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "qdrant-client", specifier = ">=1.17.0" },
+    { name = "rich", specifier = ">=13.9.0" },
     { name = "tomli-w", specifier = ">=1.0.0" },
+    { name = "typer", specifier = ">=0.12.5" },
 ]
 provides-extras = ["dev"]
 

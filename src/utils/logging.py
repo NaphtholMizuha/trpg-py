@@ -18,14 +18,20 @@ def configure_logging(debug: bool = False):
 
     level = "DEBUG" if debug else "INFO"
 
+    def formatter(record):
+        logger_name = record["extra"].get("name") or record["name"]
+        return (
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <8}</level> | "
+            f"<cyan>{logger_name}</cyan> - "
+            "<level>{message}</level>\n"
+        )
+
     # 添加控制台处理器
     logger.add(
         sys.stdout,
         level=level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-               "<level>{level: <8}</level> | "
-               "<cyan>{extra[name]}</cyan> - "
-               "<level>{message}</level>",
+        format=formatter,
         colorize=True,
     )
 

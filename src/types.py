@@ -1,10 +1,8 @@
 """
-核心类型定义 (V4版本 - 事件驱动架构)
+核心类型定义
 
-主要变更:
-1. 统一变更类型 StateChange，移除 FieldChange/KVChange
-2. 引入 Event 系统，替代临时状态字段
-3. 简化 AgentState，移除冗余字段
+当前版本的重点是使用通用 DecisionPoint 表达规则相关的决策窗口，
+避免将工作流绑定到某一种 TRPG 规则术语。
 """
 from typing import TypedDict, Annotated, Any
 from dataclasses import dataclass, field
@@ -22,84 +20,49 @@ class Operation(Enum):
     DEL = "DEL"
 
 
-class TaskSource(Enum):
-    """任务来源"""
-    DM = "dm"
-    CHAIN = "chain"
-    SYSTEM = "system"
+class DecisionTiming(str, Enum):
+    """引擎级决策窗口时机
+
+    这些 timing 由工作流定义，规则系统通过 metadata 解释细节。
+    """
+    BEFORE_ACTION = "before_action"
+    BEFORE_RESOLUTION = "before_resolution"
+    BEFORE_CONSEQUENCE = "before_consequence"
+    AFTER_CONSEQUENCE = "after_consequence"
+    AFTER_ACTION = "after_action"
 
 
-# ============== 事件系统 ==============
-
-@dataclass
-class Event:
-    """事件基类"""
-    source: str  # 事件来源节点
+VALID_DECISION_TIMINGS = {timing.value for timing in DecisionTiming}
 
 
-@dataclass
-class TaskCreated(Event):
-    """任务创建事件 - planner生成任务后发出"""
-    task: "PlannedTask"
+def normalize_decision_timing(value: str | None) -> str:
+    """将 LLM 或外部输入的 timing 归一化到引擎支持的常量。"""
+    if not value:
+        return DecisionTiming.BEFORE_RESOLUTION.value
 
-
-@dataclass
-class TaskApproved(Event):
-    """任务审批通过事件 - dm确认后发出"""
-    task: "PlannedTask"
-    dm_notes: str | None = None
-
-
-@dataclass
-class TaskRejected(Event):
-    """任务被拒绝事件"""
-    task: "PlannedTask"
-    reason: str | None = None
-
-
-@dataclass
-class ExecutionCompleted(Event):
-    """执行完成事件 - executor执行后发出"""
-    task_id: str
-    success: bool
-    narration: str
-    changes: list["StateChange"]  # 已应用的状态变更列表
-    triggered_chains: list[dict] = field(default_factory=list)
-    pending_changes: list["StateChange"] = field(default_factory=list)  # 待确认的变更（用于反应检查场景）
-
-
-@dataclass
-class ChainApproved(Event):
-    """连锁触发审批通过事件"""
-    chain_type: str
-    description: str
-    source_key: str
-
-
-@dataclass
-class ChainRejected(Event):
-    """连锁触发被拒绝事件"""
-    chain_type: str
-
-
-@dataclass
-class WorkflowEnd(Event):
-    """工作流结束事件"""
-    reason: str
+    raw = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "before_cast": DecisionTiming.BEFORE_ACTION.value,
+        "on_cast_declared": DecisionTiming.BEFORE_ACTION.value,
+        "before_spell_resolution": DecisionTiming.BEFORE_RESOLUTION.value,
+        "before_damage_resolution": DecisionTiming.BEFORE_CONSEQUENCE.value,
+        "before_damage": DecisionTiming.BEFORE_CONSEQUENCE.value,
+        "before_effect": DecisionTiming.BEFORE_CONSEQUENCE.value,
+        "after_damage": DecisionTiming.AFTER_CONSEQUENCE.value,
+        "after_effect": DecisionTiming.AFTER_CONSEQUENCE.value,
+        "after_resolution": DecisionTiming.AFTER_ACTION.value,
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in VALID_DECISION_TIMINGS:
+        return normalized
+    return DecisionTiming.BEFORE_RESOLUTION.value
 
 
 # ============== 核心数据类型 ==============
 
 @dataclass
 class StateChange:
-    """统一的状态变更记录
-
-    合并了原来的 StateChange 和 FieldChange：
-    - path: 统一路径表示，如 "Aldera.combat.HP" 或 "party.inventory"
-    - operation: 操作类型
-    - old_value/new_value: 变更前后值
-    - source: 变更来源（task_id）
-    """
+    """统一的状态变更记录"""
     path: str
     old_value: Any
     new_value: Any
@@ -108,17 +71,31 @@ class StateChange:
 
 
 @dataclass
-class PotentialReaction:
-    """Planner预判的可能反应（由DM在执行时决定是否触发）"""
-    condition: str       # 触发条件描述，如"目标反应可用且有护盾术"
-    actor: str          # 反应角色
-    spell: str | None   # 可能的反应法术
-    description: str    # 描述，如"艾尔德拉可用护盾术抵挡魔法飞弹"
+class DecisionPoint:
+    """通用决策窗口
 
+    不预设“反应”“法术”等规则名词，只描述：
+    - 谁可以做决定（decider）
+    - 当前是什么时机（timing）
+    - 可选的响应动作/能力（option_name）
+    - 出现此窗口的条件与说明
+    """
+    condition: str
+    decider: str
+    description: str
+    timing: str = DecisionTiming.BEFORE_RESOLUTION.value
+    option_name: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class PlannedTask:
-    """统一任务描述 - 自然语言为主，结构化字段可选"""
+    """统一任务描述
+
+    任务类型:
+    - normal: 普通任务（攻击、施法、移动等）
+    - world_edit: 直接世界修改
+    - decision_response: 由决策窗口派生出的响应动作
+    """
     task_id: str
     description: str  # 一句话描述（给玩家/DM看的）
     context: str  # 完整规划文本（给Executor看的）
@@ -126,7 +103,39 @@ class PlannedTask:
     target: str | None = None  # 仅用于快速筛选/显示
     source: str = "dm"  # "dm" | "chain" | "system"
     dm_notes: str | None = None  # DM审批时的批注
-    potential_reactions: list[PotentialReaction] = field(default_factory=list)  # Planner预判的可能反应
+
+    # 任务分类和状态
+    task_category: str = "normal"  # "normal" | "world_edit" | "decision_response"
+    task_status: str = "pending"  # "pending" | "waiting_decision" | "completed" | "cancelled"
+    related_task_id: str | None = None  # 关联任务ID（派生响应动作关联原任务）
+    approval_granted: bool = False  # 是否已完成 DM 审批，恢复执行时可跳过重复审批
+
+    # 可能出现的决策窗口
+    decision_points: list[DecisionPoint] = field(default_factory=list)
+
+
+@dataclass
+class ResolutionItem:
+    """阶段化结算中的单个项目。"""
+    kind: str  # "decision_point" | "state_change" | "chain"
+    timing: str
+    payload: dict[str, Any]
+
+
+@dataclass
+class ExecutionState:
+    """运行时结算状态，用于阶段化推进当前主任务。"""
+    task_id: str
+    phase_index: int = 0
+    phases: list[str] = field(default_factory=list)
+    narration: str = ""
+    direct_changes: list[StateChange] = field(default_factory=list)
+    consequence_changes: list[StateChange] = field(default_factory=list)
+    after_changes: list[StateChange] = field(default_factory=list)
+    decision_points: list[DecisionPoint] = field(default_factory=list)
+    triggered_chains: list[dict[str, Any]] = field(default_factory=list)
+    resolution_effects: list[dict[str, Any]] = field(default_factory=list)
+    execution_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -134,47 +143,35 @@ class ExecutionResult:
     """ExecutorAgent执行结果"""
     task_id: str
     success: bool
-    field_changes: list[StateChange]  # 改为 StateChange
+    field_changes: list[StateChange]
     narration: str
     execution_context: dict = field(default_factory=dict)
     triggered_chains: list[dict] = field(default_factory=list)
+    consequence_changes: list[StateChange] = field(default_factory=list)
+    decision_points: list[DecisionPoint] = field(default_factory=list)
+    resolution_effects: list[dict[str, Any]] = field(default_factory=list)
 
 
-@dataclass
-class PotentialChain:
-    """Planner预判的可能连锁"""
-    condition: str       # 触发条件描述
-    chain_type: str      # 连锁类型标记
-    description: str     # 连锁效果描述
-
-
-# ============== Agent 状态 (V4 - 事件驱动) ==============
+# ============== Agent 状态 (V6 - LangGraph 原生版) ==============
 
 class AgentState(TypedDict):
-    """LangGraph Agent 状态 (V4版本 - 事件驱动架构)
+    """LangGraph Agent 状态 (V6版本 - 使用 interrupt 和 Command)
 
-    简化设计：
-    - messages: 对话历史（LangGraph自动管理）
+    设计变更：
+    - messages: 对话历史
     - changes: 所有状态变更的历史记录
     - task_queue: 待处理任务队列
-    - metadata: 元数据
-    - _event: 瞬态事件，单次消费后即清空
-    - _current_task: 瞬态当前任务
+    - _current_task: 当前正在处理的任务（瞬态）
+    - _pending_interrupt: 中断请求（用于人机交互）
     """
     messages: Annotated[list[BaseMessage], add_messages]
-
-    # 历史记录
     changes: Annotated[list[StateChange], lambda x, y: x + y]
-
-    # 任务队列
     task_queue: list[PlannedTask]
-
-    # 元数据
-    metadata: dict
-
-    # 瞬态字段（单次流转，以下划线标记）
-    _event: Event | None
     _current_task: PlannedTask | None
+    _pending_interrupt: dict | None  # 人机交互中断请求
+    _planned_message_count: int  # 已消费的 messages 长度，避免回环时重复规划
+    _execution_state: ExecutionState | None
+    _execution_context: dict[str, Any] | None
 
 
 # ============== 辅助类型 ==============

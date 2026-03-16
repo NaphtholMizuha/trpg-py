@@ -1,0 +1,44 @@
+请直接输出世界编辑指令的结构化结果。
+
+⚠️ 重要：
+- 不要添加任何开场白、解释或总结
+- 不要输出"基于我收集到的信息"、"让我整理一下"等废话
+- 第一个字符必须是 `{` 或 `[`（JSON格式）
+
+必须严格按照以下JSON格式输出：
+
+```json
+{
+    "operation_type": "ADD|MOD|DEL",
+    "description": "人类可读的变更描述",
+    "target_entity": {
+        "type": "character|monster|item|environment|trap|effect",
+        "name": "实体名称",
+        "key": "KV键路径"
+    },
+    "field_changes": [
+        {
+            "operation": "ADD|MOD|DEL",
+            "key": "KV键路径",
+            "field": "字段名",
+            "old_value": "原值或null",
+            "new_value": "新值"
+        }
+    ],
+    "flags": {
+        "bypass_dice": true,
+        "dm_override": true,
+        "skip_reactions": true
+    }
+}
+```
+
+如果无法解析，输出：
+```json
+{
+    "operation_type": "UNKNOWN",
+    "description": "无法解析的指令",
+    "error": "具体错误信息",
+    "clarification_needed": true
+}
+```

@@ -8,7 +8,6 @@ ExecutorAgent - 执行Agent (V2版本)
 
 使用ReAct模式，通过tools执行计算
 """
-import uuid
 import json
 import re
 from pathlib import Path
@@ -17,7 +16,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from ..config import EXECUTOR_SYSTEM_PROMPT
-from ..types import PlannedTask, ExecutionResult, StateChange, Operation
+from ..types import PlannedTask, ExecutionResult, StateChange, Operation, DecisionPoint, normalize_decision_timing
 from ..utils.logging import get_logger
 from .base import BaseAgent
 
@@ -34,7 +33,7 @@ class ExecutorAgent(BaseAgent):
     ExecutorAgent - 执行Agent (V2版本)
 
     职责:
-    1. 分析PlannerAgent生成的自然语言任务描述
+    1. 分析规划阶段生成的自然语言任务描述
     2. 使用evaluate工具执行表达式计算（含Roll）
     3. 使用read/fetch_keys工具查询当前状态（只读）
     4. 生成字段级变更指令（field_changes）给Writer节点使用
@@ -71,7 +70,7 @@ class ExecutorAgent(BaseAgent):
     def get_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
 
-    def execute(self, task: PlannedTask) -> ExecutionResult:
+    def execute(self, task: PlannedTask, execution_context: dict | None = None) -> ExecutionResult:
         """
         执行PlannedTask
 
@@ -91,7 +90,8 @@ class ExecutorAgent(BaseAgent):
             actor=task.actor,
             target=task.target,
             dm_notes=task.dm_notes or "无",
-            context=task.context
+            context=task.context,
+            execution_context=json.dumps(execution_context or {}, ensure_ascii=False, indent=2)
         )
 
         # 构建对话历史
@@ -112,6 +112,12 @@ class ExecutorAgent(BaseAgent):
         elif isinstance(final_message.content, list):
             content_str = "\n".join(str(item) for item in final_message.content)
 
+        # 移除 <think> 标签及其内容（某些模型的 CoT 输出）
+        if "<think>" in content_str:
+            import re
+            content_str = re.sub(r'<think>.*?</think>', '', content_str, flags=re.DOTALL)
+            content_str = content_str.strip()
+
         logger.info("LLM 输出", content=content_str[:200] if content_str else "None")
 
         # 解析执行结果（LLM已返回triggered_chains，无需二次检测）
@@ -124,11 +130,18 @@ class ExecutorAgent(BaseAgent):
 
     def _parse_execution_result(self, content: str, task: PlannedTask) -> ExecutionResult:
         """解析JSON输出为ExecutionResult"""
+        import re
         try:
             logger.info("解析执行结果")
 
             # 清理markdown代码块
             cleaned = content.strip() if content else ""
+
+            # 移除 <think> 标签及其内容（某些模型的 CoT 输出）
+            if "<think>" in cleaned:
+                cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL)
+                cleaned = cleaned.strip()
+
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
             if cleaned.startswith("```"):
@@ -147,48 +160,26 @@ class ExecutorAgent(BaseAgent):
 
             data = json.loads(cleaned)
 
-            # 解析field_changes（优先）或changes
+            # 解析 direct_changes / field_changes（兼容旧格式）
             field_changes = []
-            changes_data = data.get("field_changes") or data.get("changes", [])
+            changes_data = data.get("direct_changes") or data.get("field_changes") or data.get("changes", [])
             for c in changes_data:
-                # 构建path：如果key和field都有，组合成 "key.field"
-                key = c.get("key", c.get("path", ""))
-                field = c.get("field", "")
-                path = f"{key}.{field}" if field and key else (key or field or "unknown")
+                field_changes.append(self._parse_state_change(c, task.task_id))
 
-                # 解析operation
-                op_str = c.get("operation", "MOD")
-                try:
-                    operation = Operation(op_str)
-                except ValueError:
-                    operation = Operation.MOD
-
-                field_changes.append(StateChange(
-                    path=path,
-                    old_value=c.get("old_value", ""),
-                    new_value=c.get("new_value", ""),
-                    operation=operation,
-                    source=task.task_id
-                ))
-
-            # 解析 pending_changes（反应检查场景下的待处理变更）
-            pending_changes = []
-            pending_data = data.get("pending_changes", [])
+            consequence_changes = []
+            pending_data = data.get("consequence_changes") or data.get("pending_changes", [])
             for c in pending_data:
-                key = c.get("key", c.get("path", ""))
-                field = c.get("field", "")
-                path = f"{key}.{field}" if field and key else (key or field or "unknown")
-                op_str = c.get("operation", "MOD")
-                try:
-                    operation = Operation(op_str)
-                except ValueError:
-                    operation = Operation.MOD
-                pending_changes.append(StateChange(
-                    path=path,
-                    old_value=c.get("old_value", ""),
-                    new_value=c.get("new_value", ""),
-                    operation=operation,
-                    source=task.task_id
+                consequence_changes.append(self._parse_state_change(c, task.task_id))
+
+            decision_points = []
+            for point in data.get("decision_points", []):
+                decision_points.append(DecisionPoint(
+                    condition=point.get("condition", ""),
+                    decider=point.get("decider") or point.get("actor", ""),
+                    description=point.get("description", ""),
+                    timing=normalize_decision_timing(point.get("timing")),
+                    option_name=point.get("option_name") or point.get("spell"),
+                    metadata=point.get("metadata", {}),
                 ))
 
             result = ExecutionResult(
@@ -197,7 +188,10 @@ class ExecutorAgent(BaseAgent):
                 field_changes=field_changes,
                 narration=data.get("narration", "执行完成"),
                 triggered_chains=data.get("triggered_chains", []),
-                execution_context={"pending_changes": pending_changes} if pending_changes else {}
+                execution_context={},
+                consequence_changes=consequence_changes,
+                decision_points=decision_points,
+                resolution_effects=data.get("resolution_effects", []),
             )
 
             logger.info(
@@ -217,8 +211,29 @@ class ExecutorAgent(BaseAgent):
                 success=True,
                 field_changes=[],
                 narration=content[:500] if content else "执行完成",
-                triggered_chains=[]
+                triggered_chains=[],
+                consequence_changes=[],
+                decision_points=[],
+                resolution_effects=[],
             )
+
+    def _parse_state_change(self, data: dict, task_id: str) -> StateChange:
+        key = data.get("key", data.get("path", ""))
+        field = data.get("field", "")
+        path = f"{key}.{field}" if field and key else (key or field or "unknown")
+        op_str = data.get("operation", "MOD")
+        try:
+            operation = Operation(op_str)
+        except ValueError:
+            operation = Operation.MOD
+
+        return StateChange(
+            path=path,
+            old_value=data.get("old_value", ""),
+            new_value=data.get("new_value", ""),
+            operation=operation,
+            source=task_id
+        )
 
     def run(self, task: PlannedTask) -> ExecutionResult:
         """
