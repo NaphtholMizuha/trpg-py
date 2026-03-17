@@ -48,7 +48,7 @@ class DeepPlannerAgent(BaseAgent):
         tools: list[BaseTool] | None = None,
         skills: list[Skill] | None = None,
     ):
-        super().__init__(model, api_key, base_url, tools, max_iterations=10)
+        super().__init__(model, api_key, base_url, tools, max_iterations=4)
         self.skills = skills or []
         self._logger = get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
 

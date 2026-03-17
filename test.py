@@ -8,10 +8,10 @@
   python test.py --provider openai          # 使用 openai
 
 当前脚本重点观察：
-1. 普通动作是否会生成带 timing 的决策窗口
-2. 响应动作是否会立即结算自己的直接变更
-3. 响应动作是否会通过 negate_consequence 否定原动作结果
-4. 当前版本是否支持“响应上的再响应”（例如护盾术再被法术反制）
+1. 魔法飞弹伤害即将结算时，艾尔德拉是否会获得护盾术决策窗口
+2. 艾尔德拉即将施放护盾术时，马利克是否会获得法术反制决策窗口
+3. 法术反制成功后，是否会阻止护盾术继续落地
+4. 护盾术被阻止后，原始魔法飞弹伤害是否会正常结算
 
 环境变量配置：
   DEEPSEEK_API_KEY      - DeepSeek API 密钥
@@ -29,7 +29,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.table import Table
 
@@ -264,20 +264,10 @@ def main(
         case_sensitive=False,
         show_choices=True,
     ),
-    scenario: str = typer.Option(
-        "all",
-        "--scenario",
-        help="选择要运行的观察场景",
-        case_sensitive=False,
-        show_choices=True,
-    ),
 ):
     provider = provider.lower()
-    scenario = scenario.lower()
     if provider not in {"deepseek", "minimax", "openai"}:
         raise typer.BadParameter("provider 必须是 deepseek / minimax / openai")
-    if scenario not in {"all", "shield", "counterspell"}:
-        raise typer.BadParameter("scenario 必须是 all / shield / counterspell")
 
     # 只有在没有 --manual 参数时才设置自动确认
     if not manual:
@@ -326,30 +316,14 @@ def main(
     )
     console.print(f"  工作流创建成功 (模型: [bold]{config.llm_model}[/bold])")
 
-    scenarios = [
-        Scenario(
-            name="shield",
-            user_input="马利克发动一环魔法飞弹，3发全部攻击艾尔德拉",
-            objective="观察普通施法是否会在 before_consequence 阶段给艾尔德拉开出护盾术决策窗口。",
-            expected_now="当前版本如果规划和执行都正常，应能看到艾尔德拉的护盾术窗口；若选择护盾术，响应任务应记录 negate_consequence，并使魔法飞弹伤害不落地。"
-        ),
-        Scenario(
-            name="counterspell",
-            user_input="马利克对艾尔德拉施放魔法飞弹；如果艾尔德拉尝试施放护盾术，马利克会立刻以法术反制阻止她",
-            objective="观察当前架构是否支持“响应动作上的再响应”，也就是护盾术是否还能再触发马利克的法术反制窗口。",
-            expected_now="当前版本应支持二层响应：主任务先出现艾尔德拉的护盾术窗口；若选择护盾术，应进入响应任务本身的决策窗口，再出现马利克的法术反制。若法术反制成功，应取消护盾术，不应让被打断的护盾术继续落地。"
-        ),
-    ]
+    scenario = Scenario(
+        name="magic_missile_shield_counterspell",
+        user_input="马利克对艾尔德拉施放魔法飞弹。理想情况中魔法飞弹伤害即将结算的时候，艾尔德拉可以反应施放护盾术，而艾尔德拉即将施放护盾术时，马利克可以施放法术反制。",
+        objective="观察系统是否支持一条完整的响应链：魔法飞弹即将结算时出现护盾术窗口，而护盾术即将施放时再出现法术反制窗口。",
+        expected_now="理想情况下，先看到艾尔德拉的护盾术决策窗口；若选择护盾术，再看到马利克的法术反制窗口；若法术反制成功，护盾术不应落地，随后魔法飞弹伤害应继续正常结算。"
+    )
 
-    if scenario != "all":
-        scenarios = [s for s in scenarios if s.name == scenario]
-
-    for i, scenario in enumerate(scenarios, 1):
-        run_scenario(workflow, store, scenario, f"scene_{i}_{scenario.name}")
-        if i < len(scenarios):
-            if manual:
-                Confirm.ask("继续下一个场景？", default=True)
-            console.print("\n[dim]继续下一个场景...[/dim]")
+    run_scenario(workflow, store, scenario, "scene_magic_missile_shield_counterspell")
 
     print_header("观察结束")
 

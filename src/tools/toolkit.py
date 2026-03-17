@@ -23,7 +23,7 @@ from .kv_state import KVStateStore
 class SearchInput(BaseModel):
     """RAG 检索工具输入"""
     query: str = Field(description="搜索查询文本")
-    limit: int = Field(default=3, description="返回结果数量")
+    limit: int = Field(default=2, description="返回结果数量")
 
 
 class EvaluateInput(BaseModel):
@@ -75,7 +75,7 @@ class SearchTool(BaseTool):
 
     retriever: Retriever = Field(exclude=True)
 
-    def _run(self, query: str, limit: int = 3) -> str:
+    def _run(self, query: str, limit: int = 2) -> str:
         results = self.retriever.search(query, limit=limit)
         if not results:
             return "未找到相关结果"
@@ -83,17 +83,13 @@ class SearchTool(BaseTool):
         output_lines = []
         for i, result in enumerate(results, 1):
             score = result.get("score", 0)
-            content = result.get("content", "")
+            content = _truncate_text(result.get("content", ""), 220)
             metadata = result.get("metadata", {})
             title = metadata.get("title", "无标题")
             file = metadata.get("file", "未知")
 
             output_lines.append(f"[{i}] {title} (来源: {file}, 相关性: {score:.2f})")
             output_lines.append(content)
-
-            parent = result.get("parent_content")
-            if parent:
-                output_lines.append(f"上下文: {parent}")
 
             output_lines.append("")
 
@@ -144,7 +140,7 @@ class ReadTool(BaseTool):
         for key in keys:
             value = self.store.get(key)
             if value:
-                results.append(f"[{key}] {value}")
+                results.append(f"[{key}] {_truncate_text(value, 160)}")
             else:
                 results.append(f"[{key}] 不存在")
         return "\n".join(results)
@@ -324,3 +320,10 @@ class TrpgToolkit(BaseToolkit):
             WriteTool(store=self._store),
             WriteFieldsTool(store=self._store),
         ]
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    """截断工具返回，避免将过长文本反复送回 ReAct 上下文。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "... [截断]"

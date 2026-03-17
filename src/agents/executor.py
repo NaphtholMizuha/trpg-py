@@ -65,7 +65,7 @@ class ExecutorAgent(BaseAgent):
             if removed:
                 logger.debug(f"ExecutorAgent 过滤掉非查询工具: {removed}")
 
-        super().__init__(model, api_key, base_url, filtered_tools, max_iterations=10)
+        super().__init__(model, api_key, base_url, filtered_tools, max_iterations=4)
 
     def get_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
