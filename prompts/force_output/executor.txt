@@ -1,13 +1,8 @@
-请直接输出JSON格式的执行结果，不要继续调用工具。
+请直接输出 JSON 格式的执行结果，不要继续调用工具。
 
 必须包含这些字段：
 - `success`
 - `narration`
-- `direct_changes`
-- `consequence_changes`
-- `decision_points`
-- `resolution_effects`
+- `field_changes`
+- `step_updates`
 - `triggered_chains`
-
-当前 `resolution_effects` 只允许输出：
-- `{"effect_type": "negate_consequence"}`

@@ -7,6 +7,7 @@ TrpgToolkit - 极简工具箱
 - read: 读取指定 key(s) 的值
 - write: ADD/MOD/DEL 状态变更
 """
+import re
 
 from pydantic import BaseModel, Field
 from langchain_core.tools import BaseTool, BaseToolkit
@@ -108,6 +109,8 @@ class EvaluateTool(BaseTool):
     logic_engine: LogicEngine = Field(exclude=True)
 
     def _run(self, expression: str) -> str:
+        if not _is_safe_evaluate_expression(expression):
+            return "执行错误: 非法表达式，仅允许掷骰、数值计算或真假判断"
         try:
             result = self.logic_engine.eval(expression)
             return f"结果: {result.result}\n轨迹: {result.resolved}"
@@ -259,6 +262,11 @@ field_changes: [
                 new_value = fc.get("new_value", "")
                 operation = fc.get("operation", "MOD")
 
+                if not key or key.startswith("task_") or key not in self.store.get_keys():
+                    raise ValueError("只允许写入已存在的 world-state key")
+                if not field:
+                    raise ValueError("字段级写入必须提供 field")
+
                 # 读取当前完整值
                 current_full = self.store.get(key) or ""
 
@@ -327,3 +335,25 @@ def _truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "... [截断]"
+
+
+def _is_safe_evaluate_expression(expression: str) -> bool:
+    if not expression or not expression.strip():
+        return False
+
+    expr = expression.strip()
+    if any(token in expr for token in (";", "\n", "let ", "var ", "const ", "//")):
+        return False
+    if re.search(r"[\u4e00-\u9fff]", expr):
+        return False
+    if re.fullmatch(r"""["'].*["']""", expr):
+        return False
+    if re.search(r"(?<![<>=!])=(?![=])", expr):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_().,'\"+\-*/%<>=!&| \t]+", expr):
+        return False
+
+    has_roll = "Roll(" in expr
+    has_numeric_or_bool = bool(re.search(r"\d", expr) or re.search(r"(True|False|and|or|not)\b", expr))
+    has_operator = bool(re.search(r"[+\-*/%]|<=|>=|==|!=|<|>", expr))
+    return (has_roll or has_numeric_or_bool) and has_operator

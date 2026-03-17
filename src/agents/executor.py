@@ -1,13 +1,6 @@
-"""
-ExecutorAgent - 执行Agent (V2版本)
+"""ExecutorAgent - 最小执行 Agent。"""
+from __future__ import annotations
 
-职责分离：只负责计算，不直接写入KV状态
-- 使用查询工具（search/evaluate/fetch_keys/read）获取信息
-- 生成字段级变更指令（field_changes）供 Writer 节点使用
-- 检测简单连锁条件并返回触发信息
-
-使用ReAct模式，通过tools执行计算
-"""
 import json
 import re
 from pathlib import Path
@@ -16,38 +9,21 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from ..config import EXECUTOR_SYSTEM_PROMPT
-from ..types import PlannedTask, ExecutionResult, StateChange, Operation, DecisionPoint, normalize_decision_timing
+from ..types import PlannedTask, ExecutionResult, StateChange, Operation, StepUpdate, ProposedFragment
 from ..utils.logging import get_logger
 from .base import BaseAgent
 
 logger = get_logger(__name__)
 
-# 读取 prompt 文件
 _PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts"
 TASK_TEMPLATE = (_PROMPT_DIR / "executor_task.md").read_text(encoding="utf-8")
 FORCE_OUTPUT_PROMPT = (_PROMPT_DIR / "force_output" / "executor.txt").read_text(encoding="utf-8")
 
 
 class ExecutorAgent(BaseAgent):
-    """
-    ExecutorAgent - 执行Agent (V2版本)
-
-    职责:
-    1. 分析规划阶段生成的自然语言任务描述
-    2. 使用evaluate工具执行表达式计算（含Roll）
-    3. 使用read/fetch_keys工具查询当前状态（只读）
-    4. 生成字段级变更指令（field_changes）给Writer节点使用
-    5. 检测简单连锁条件并返回触发信息
-
-    注意：本Agent不直接写入KV状态，只输出变更指令
-    写入操作由独立的Writer节点负责（读取→合并→写入）
-
-    如果不能确定计算逻辑，回滚到DM确认
-    """
+    """执行单个步骤，并返回状态更新。"""
 
     SYSTEM_PROMPT = EXECUTOR_SYSTEM_PROMPT
-
-    # Executor 只使用 evaluate 计算工具和 write_fields 写入工具
     ALLOWED_TOOLS = {"evaluate", "write_fields"}
 
     def __init__(
@@ -55,35 +31,19 @@ class ExecutorAgent(BaseAgent):
         model: str = "gpt-4o",
         api_key: str | None = None,
         base_url: str | None = None,
-        tools: list[BaseTool] | None = None
+        tools: list[BaseTool] | None = None,
     ):
-        # 过滤工具：只保留查询工具，移除 write 工具
         filtered_tools = None
         if tools is not None:
             filtered_tools = [t for t in tools if t.name in self.ALLOWED_TOOLS]
-            removed = [t.name for t in tools if t.name not in self.ALLOWED_TOOLS]
-            if removed:
-                logger.debug(f"ExecutorAgent 过滤掉非查询工具: {removed}")
-
         super().__init__(model, api_key, base_url, filtered_tools, max_iterations=4)
 
     def get_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
 
     def execute(self, task: PlannedTask, execution_context: dict | None = None) -> ExecutionResult:
-        """
-        执行PlannedTask
-
-        使用ReAct模式:
-        1. 调用LLM生成tool calls
-        2. 执行tools计算
-        3. 解析生成的field_changes
-        4. 检测连锁条件
-        5. 返回执行结果
-        """
         logger.info("ExecutorAgent 执行任务", task_id=task.task_id, description=task.description)
 
-        # 使用模板构建任务提示
         task_prompt = TASK_TEMPLATE.format(
             task_id=task.task_id,
             description=task.description,
@@ -91,57 +51,34 @@ class ExecutorAgent(BaseAgent):
             target=task.target,
             dm_notes=task.dm_notes or "无",
             context=task.context,
-            execution_context=json.dumps(execution_context or {}, ensure_ascii=False, indent=2)
+            execution_context=json.dumps(execution_context or {}, ensure_ascii=False, indent=2),
         )
 
-        # 构建对话历史
         messages = [
             SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(content=task_prompt)
+            HumanMessage(content=task_prompt),
         ]
+        final_message = self._react_loop(messages, force_output_prompt=FORCE_OUTPUT_PROMPT)
 
-        # 使用基类的 ReAct 循环
-        final_message = self._react_loop(
-            messages,
-            force_output_prompt=FORCE_OUTPUT_PROMPT
-        )
-
-        content_str = ""
+        content = ""
         if isinstance(final_message.content, str):
-            content_str = final_message.content
+            content = final_message.content
         elif isinstance(final_message.content, list):
-            content_str = "\n".join(str(item) for item in final_message.content)
+            content = "\n".join(str(item) for item in final_message.content)
+        if "<think>" in content:
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
-        # 移除 <think> 标签及其内容（某些模型的 CoT 输出）
-        if "<think>" in content_str:
-            import re
-            content_str = re.sub(r'<think>.*?</think>', '', content_str, flags=re.DOTALL)
-            content_str = content_str.strip()
+        logger.info("LLM 输出", content=content[:200] if content else "None")
+        return self._parse_execution_result(content, task, execution_context or {})
 
-        logger.info("LLM 输出", content=content_str[:200] if content_str else "None")
-
-        # 解析执行结果（LLM已返回triggered_chains，无需二次检测）
-        result = self._parse_execution_result(content_str, task)
-
-        if result.triggered_chains:
-            logger.info("LLM检测到连锁触发", chains=[c["type"] for c in result.triggered_chains])
-
-        return result
-
-    def _parse_execution_result(self, content: str, task: PlannedTask) -> ExecutionResult:
-        """解析JSON输出为ExecutionResult"""
-        import re
+    def _parse_execution_result(
+        self,
+        content: str,
+        task: PlannedTask,
+        execution_context: dict[str, object],
+    ) -> ExecutionResult:
         try:
-            logger.info("解析执行结果")
-
-            # 清理markdown代码块
             cleaned = content.strip() if content else ""
-
-            # 移除 <think> 标签及其内容（某些模型的 CoT 输出）
-            if "<think>" in cleaned:
-                cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL)
-                cleaned = cleaned.strip()
-
             if cleaned.startswith("```json"):
                 cleaned = cleaned[7:]
             if cleaned.startswith("```"):
@@ -150,72 +87,81 @@ class ExecutorAgent(BaseAgent):
                 cleaned = cleaned[:-3]
             cleaned = cleaned.strip()
 
-            # 找到JSON部分
             json_start = cleaned.find("{")
             json_end = cleaned.rfind("}")
             if json_start >= 0 and json_end > json_start:
-                cleaned = cleaned[json_start:json_end+1]
-            else:
-                raise ValueError(f"No JSON object found in content: {cleaned[:200]}")
+                cleaned = cleaned[json_start:json_end + 1]
 
             data = json.loads(cleaned)
 
-            # 解析 direct_changes / field_changes（兼容旧格式）
-            field_changes = []
-            changes_data = data.get("direct_changes") or data.get("field_changes") or data.get("changes", [])
-            for c in changes_data:
-                field_changes.append(self._parse_state_change(c, task.task_id))
+            field_changes = [
+                self._parse_state_change(change, task.task_id)
+                for change in (data.get("field_changes") or data.get("direct_changes") or [])
+            ]
+            step_updates = [
+                StepUpdate(
+                    step_id=item.get("step_id", ""),
+                    status=item.get("status", "completed"),
+                    note=item.get("note", ""),
+                )
+                for item in data.get("step_updates", [])
+                if item.get("step_id")
+            ]
 
-            consequence_changes = []
-            pending_data = data.get("consequence_changes") or data.get("pending_changes", [])
-            for c in pending_data:
-                consequence_changes.append(self._parse_state_change(c, task.task_id))
-
-            decision_points = []
-            for point in data.get("decision_points", []):
-                decision_points.append(DecisionPoint(
-                    condition=point.get("condition", ""),
-                    decider=point.get("decider") or point.get("actor", ""),
-                    description=point.get("description", ""),
-                    timing=normalize_decision_timing(point.get("timing")),
-                    option_name=point.get("option_name") or point.get("spell"),
-                    metadata=point.get("metadata", {}),
-                ))
+            fragment_data = data.get("proposed_fragment")
+            proposed_fragment = None
+            if fragment_data and fragment_data.get("anchor_step_id"):
+                proposed_fragment = ProposedFragment(
+                    anchor_step_id=fragment_data.get("anchor_step_id", ""),
+                    insert_position=fragment_data.get("insert_position", "after"),
+                    reason=fragment_data.get("reason", ""),
+                    fragment_summary=fragment_data.get("fragment_summary", ""),
+                    required_context_keys=fragment_data.get("required_context_keys", []),
+                    choice_title=fragment_data.get("choice_title"),
+                    choice_prompt=fragment_data.get("choice_prompt"),
+                )
 
             result = ExecutionResult(
                 task_id=task.task_id,
                 success=data.get("success", True),
                 field_changes=field_changes,
                 narration=data.get("narration", "执行完成"),
+                step_updates=step_updates,
+                proposed_fragment=proposed_fragment,
                 triggered_chains=data.get("triggered_chains", []),
-                execution_context={},
-                consequence_changes=consequence_changes,
-                decision_points=decision_points,
-                resolution_effects=data.get("resolution_effects", []),
+                execution_context=data.get("execution_context", {}),
             )
-
-            logger.info(
-                "执行结果解析完成",
-                narration=result.narration[:100],
-                change_count=len(result.field_changes),
-                triggered_chains_count=len(result.triggered_chains)
-            )
-
+            result = self._sanitize_result(result, execution_context)
+            if not self._is_actionable_result(result):
+                logger.warning("Executor 输出为空结果，将标记为 stalled", active_step_id=execution_context.get("active_step_id"))
+                result.success = False
+                result.narration = "executor_stalled"
             return result
+        except Exception as exc:
+            logger.error("解析执行结果时出错", error=str(exc), content=content[:500] if content else "None")
+            return self._build_fallback_result(task, execution_context)
 
-        except Exception as e:
-            logger.error("解析执行结果时出错", error=str(e), content=content[:500] if content else "None")
-            # 返回基本结果
+    def _build_fallback_result(
+        self,
+        task: PlannedTask,
+        execution_context: dict[str, object],
+    ) -> ExecutionResult:
+        if task.task_category == "world_edit":
             return ExecutionResult(
                 task_id=task.task_id,
                 success=True,
                 field_changes=[],
-                narration=content[:500] if content else "执行完成",
-                triggered_chains=[],
-                consequence_changes=[],
-                decision_points=[],
-                resolution_effects=[],
+                narration="世界编辑任务待人工确认",
             )
+
+        return ExecutionResult(
+            task_id=task.task_id,
+            success=True,
+            field_changes=[],
+            narration="使用回退逻辑推进执行稿",
+            step_updates=[StepUpdate(step_id=str(execution_context.get("active_step_id")), status="completed", note="fallback")] if execution_context.get("active_step_id") else [],
+            triggered_chains=[],
+        )
 
     def _parse_state_change(self, data: dict, task_id: str) -> StateChange:
         key = data.get("key", data.get("path", ""))
@@ -226,28 +172,49 @@ class ExecutorAgent(BaseAgent):
             operation = Operation(op_str)
         except ValueError:
             operation = Operation.MOD
-
         return StateChange(
             path=path,
             old_value=data.get("old_value", ""),
             new_value=data.get("new_value", ""),
             operation=operation,
-            source=task_id
+            source=task_id,
         )
 
+    def _is_actionable_result(self, result: ExecutionResult) -> bool:
+        return any(
+            (
+                result.field_changes,
+                result.step_updates,
+                result.triggered_chains,
+            )
+        )
+
+    def _sanitize_result(self, result: ExecutionResult, execution_context: dict[str, object]) -> ExecutionResult:
+        active_step_id = str(execution_context.get("active_step_id") or "")
+        active_step = execution_context.get("active_step") or {}
+        active_phase = str(active_step.get("phase") or "")
+        relevant_keys = set(execution_context.get("relevant_keys") or [])
+
+        if active_step_id:
+            result.step_updates = [item for item in result.step_updates if item.step_id == active_step_id][:1]
+
+        result.field_changes = [
+            change for change in result.field_changes
+            if self._is_valid_world_state_change(change.path, relevant_keys)
+        ]
+
+        if active_phase == "choice":
+            result.field_changes = []
+
+        result.proposed_fragment = None
+
+        return result
+
+    def _is_valid_world_state_change(self, path: str, relevant_keys: set[str]) -> bool:
+        if not path or path.startswith("task_"):
+            return False
+        key = path.rsplit(".", 1)[0] if "." in path else path
+        return not relevant_keys or key in relevant_keys
+
     def run(self, task: PlannedTask) -> ExecutionResult:
-        """
-        执行任务的入口方法（execute 的别名）
-
-        遵循设计规范：
-        - 只使用查询工具（search/evaluate/fetch_keys/read）
-        - 不直接写入 KV 状态
-        - 返回包含 field_changes 的 ExecutionResult
-
-        Args:
-            task: PlannedTask 任务对象
-
-        Returns:
-            ExecutionResult 包含字段级变更指令，供 Writer 节点使用
-        """
         return self.execute(task)

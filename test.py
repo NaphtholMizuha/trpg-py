@@ -2,21 +2,23 @@
 工作流观察脚本
 
 使用方式：
-  python test.py                            # 默认使用 deepseek，自动确认模式
+  python test.py                            # 默认使用 deepseek-chat，自动确认模式
   python test.py --manual                   # 手动审批模式（使用 interrupt）
-  python test.py --provider minimax         # 使用 MiniMax-M2.5（DashScope 兼容接口）
+  python test.py --provider deepseek        # 使用 deepseek-chat
+  python test.py --provider minimax         # 使用 MiniMax-M2.5
+  python test.py --provider kimi            # 使用 kimi-for-coding
   python test.py --provider openai          # 使用 openai
 
 当前脚本重点观察：
-1. 魔法飞弹伤害即将结算时，艾尔德拉是否会获得护盾术决策窗口
-2. 艾尔德拉即将施放护盾术时，马利克是否会获得法术反制决策窗口
-3. 法术反制成功后，是否会阻止护盾术继续落地
-4. 护盾术被阻止后，原始魔法飞弹伤害是否会正常结算
+1. planner 是否生成简洁的 Markdown 执行稿
+2. executor 是否按步骤推进执行状态
+3. 任务是否在不引入返工/补丁流程的情况下稳定结束
 
 环境变量配置：
   DEEPSEEK_API_KEY      - DeepSeek API 密钥
-  DEEPSEEK_BASE_URL     - DeepSeek API 地址（可选）
-  DASHSCOPE_API_KEY     - DashScope API 密钥（用于 minimax 提供商）
+  DEEPSEEK_BASE_URL     - DeepSeek API 地址（可选，默认 https://api.deepseek.com/v1）
+  MINIMAX_API_KEY       - MiniMax API 密钥
+  KIMI_API_KEY          - Kimi API 密钥
   OPENAI_API_KEY        - OpenAI API 密钥
   OPENAI_BASE_URL       - OpenAI API 地址（可选）
 """
@@ -79,6 +81,18 @@ def print_scenario_notes(scenario: Scenario):
     console.print(Panel(table, title=f"场景: {scenario.name}", border_style="blue"))
 
 
+def extract_markdown_section(markdown: str, title: str) -> str:
+    marker = f"## {title}"
+    start = markdown.find(marker)
+    if start < 0:
+        return ""
+
+    remainder = markdown[start + len(marker):]
+    next_header = remainder.find("\n## ")
+    section = remainder[:next_header] if next_header >= 0 else remainder
+    return section.strip()
+
+
 def prompt_approval() -> dict[str, str]:
     action = Prompt.ask(
         "[bold]审批操作[/bold]",
@@ -91,15 +105,6 @@ def prompt_approval() -> dict[str, str]:
     return {"action": action}
 
 
-def prompt_decision_choice(decision_points: list[dict]) -> dict[str, str]:
-    if not decision_points:
-        return {"choice": "n"}
-
-    choices = [str(i) for i in range(1, len(decision_points) + 1)] + ["n"]
-    choice = Prompt.ask("选择响应", choices=choices, default="n")
-    return {"choice": choice}
-
-
 def run_scenario(workflow, store, scenario: Scenario, thread_id: str):
     """运行单个测试场景"""
     print_header(f"场景: {scenario.name}")
@@ -109,22 +114,11 @@ def run_scenario(workflow, store, scenario: Scenario, thread_id: str):
     # 重置状态
     store.reload()
 
-    # V11 架构: 初始状态不包含 messages，在 invoke 时传入
-    initial_state = {
-        "changes": [],
-        "task_queue": [],
-        "_current_task": None,
-        "_pending_interrupt": None,
-        "_planned_message_count": 0,
-        "_execution_state": None,
-        "_execution_context": None,
-    }
-
     config = {"configurable": {"thread_id": thread_id}}
 
     # 用于去重打印
     printed_task_id = None
-    printed_phase = None
+    printed_script_snapshot = None
     interrupt_count = 0
 
     try:
@@ -151,16 +145,23 @@ def run_scenario(workflow, store, scenario: Scenario, thread_id: str):
                 console.print(f"  行动者: {current_task.actor}, 目标: {current_task.target}")
                 if current_task.source == "chain":
                     console.print("  来源: 连锁触发")
+                if current_task.context and "## Task Summary" in current_task.context:
+                    steps_section = extract_markdown_section(current_task.context, "Execution Steps")
+                    hints_section = extract_markdown_section(current_task.context, "Planner Hints")
+                    snapshot = (steps_section, hints_section)
+                    if snapshot != printed_script_snapshot:
+                        if steps_section:
+                            console.print("\n[bold blue]Execution Steps[/bold blue]")
+                            console.print(steps_section[:1200], markup=False)
+                        if hints_section:
+                            console.print("\n[bold blue]Planner Hints[/bold blue]")
+                            console.print(hints_section[:800], markup=False)
+                        printed_script_snapshot = snapshot
                 printed_task_id = id(current_task)
 
-            execution_state = output.get("_execution_state")
-            if execution_state and execution_state.phase_index < len(execution_state.phases):
-                current_phase = execution_state.phases[execution_state.phase_index]
-                if current_phase != printed_phase:
-                    console.print(f"\n[cyan]当前结算阶段[/cyan]: {current_phase}")
-                    if execution_state.resolution_effects:
-                        console.print(f"  已记录修正效果: {execution_state.resolution_effects}")
-                    printed_phase = current_phase
+            execution_script = output.get("_execution_script")
+            if execution_script and execution_script.active_step_id:
+                console.print(f"\n[cyan]当前执行步骤[/cyan]: {execution_script.active_step_id}")
 
             execution_context = output.get("_execution_context")
             if execution_context and execution_context.get("relevant_keys"):
@@ -201,40 +202,6 @@ def run_scenario(workflow, store, scenario: Scenario, thread_id: str):
                         current_input = Command(resume=prompt_approval())
                         continue
 
-                elif interrupt_type == "decision_point_choice":
-                    console.print(f"\n[bold magenta]决策窗口[/bold magenta] [dim](Interrupt #{interrupt_count})[/dim]")
-                    decision_points = interrupt_info.get("decision_points", [])
-                    table = Table(show_header=True, header_style="bold magenta")
-                    table.add_column("#", width=3)
-                    table.add_column("决策者", width=12)
-                    table.add_column("时机", width=20)
-                    table.add_column("选项", width=16)
-                    table.add_column("说明")
-                    for i, point in enumerate(decision_points, 1):
-                        table.add_row(
-                            str(i),
-                            str(point.get("decider")),
-                            str(point.get("timing")),
-                            str(point.get("option_name")),
-                            str(point.get("description")),
-                        )
-                        metadata = point.get("metadata") or {}
-                        if metadata:
-                            console.print(f"  metadata[{i}]: {metadata}")
-                    console.print(table)
-                    console.print("  n. 不触发任何响应")
-
-                    if os.getenv("TRPG_AUTO_CONFIRM") == "1":
-                        if decision_points:
-                            console.print("  [green]自动选择第一个响应[/green]")
-                            current_input = Command(resume={"choice": "1"})
-                        else:
-                            current_input = Command(resume={"choice": "n"})
-                        continue
-                    else:
-                        current_input = Command(resume=prompt_decision_choice(decision_points))
-                        continue
-
             # 打印队列状态
             queue = output.get("task_queue", [])
             if queue and len(queue) > 0:
@@ -266,8 +233,8 @@ def main(
     ),
 ):
     provider = provider.lower()
-    if provider not in {"deepseek", "minimax", "openai"}:
-        raise typer.BadParameter("provider 必须是 deepseek / minimax / openai")
+    if provider not in {"deepseek", "minimax", "kimi", "openai"}:
+        raise typer.BadParameter("provider 必须是 deepseek / minimax / kimi / openai")
 
     # 只有在没有 --manual 参数时才设置自动确认
     if not manual:
@@ -288,8 +255,8 @@ def main(
         config = replace(
             config,
             llm_model="MiniMax-M2.5",
-            llm_api_key=os.getenv("DASHSCOPE_API_KEY"),
-            llm_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            llm_api_key=os.getenv("MINIMAX_API_KEY"),
+            llm_base_url="https://api.minimaxi.com/v1",
         )
 
     # 加载世界状态
@@ -301,7 +268,8 @@ def main(
     if not config.llm_api_key:
         provider_env = {
             "deepseek": "DEEPSEEK_API_KEY",
-            "minimax": "DASHSCOPE_API_KEY",
+            "minimax": "MINIMAX_API_KEY",
+            "kimi": "KIMI_API_KEY",
             "openai": "OPENAI_API_KEY"
         }
         env_var = provider_env.get(provider, "API_KEY")
@@ -318,9 +286,9 @@ def main(
 
     scenario = Scenario(
         name="magic_missile_shield_counterspell",
-        user_input="马利克对艾尔德拉施放魔法飞弹。理想情况中魔法飞弹伤害即将结算的时候，艾尔德拉可以反应施放护盾术，而艾尔德拉即将施放护盾术时，马利克可以施放法术反制。",
-        objective="观察系统是否支持一条完整的响应链：魔法飞弹即将结算时出现护盾术窗口，而护盾术即将施放时再出现法术反制窗口。",
-        expected_now="理想情况下，先看到艾尔德拉的护盾术决策窗口；若选择护盾术，再看到马利克的法术反制窗口；若法术反制成功，护盾术不应落地，随后魔法飞弹伤害应继续正常结算。"
+        user_input="马利克对艾尔德拉施放魔法飞弹。",
+        objective="观察在 DM 只描述主动作时，combat skill 是否仍能依据状态与规则自行推导出护盾术与法术反制这条响应链。",
+        expected_now="理想情况下，即使 DM 没有额外提醒，也能先看到围绕魔法飞弹主步骤的执行稿，以及指向护盾术/法术反制的 Planner Hints；执行阶段应稳定推进，或在无法推进时直接结束当前任务，而不是进入返工/补丁流程。"
     )
 
     run_scenario(workflow, store, scenario, "scene_magic_missile_shield_counterspell")

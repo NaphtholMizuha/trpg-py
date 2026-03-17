@@ -19,9 +19,9 @@
 ## CLI 与测试脚本
 
 - 将 `test.py` 从基础 `argparse` 交互升级为 `Typer + Rich` 风格 CLI，改善场景展示、审批提示、决策窗口展示和交互输入体验。
-- `minimax` 提供商在 `test.py` 中改为使用 DashScope OpenAI-compatible 接口：
-  - `base_url = https://dashscope.aliyuncs.com/compatible-mode/v1`
-  - `api_key = DASHSCOPE_API_KEY`
+- `minimax` 提供商在 `test.py` 中恢复为使用 MiniMax 官方接口：
+  - `base_url = https://api.minimaxi.com/v1`
+  - `api_key = MINIMAX_API_KEY`
   - 模型名调整为 `MiniMax-M2.5`
 - 更新 `counterspell` 场景说明，使之反映当前目标是“支持二层响应”。
 

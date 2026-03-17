@@ -5,6 +5,7 @@ Agent 基类 - 封装 ReAct 循环和工具调用逻辑
 """
 from abc import ABC, abstractmethod
 from typing import Any, cast
+import json
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -18,6 +19,8 @@ logger = get_logger(__name__)
 class BaseAgent(ABC):
     """Agent 基类 - 封装 ReAct 循环和工具调用逻辑"""
 
+    CACHEABLE_TOOLS: set[str] = set()
+
     def __init__(
         self,
         model: str,
@@ -30,6 +33,7 @@ class BaseAgent(ABC):
         self.llm = self._create_llm(model, api_key, base_url)
         self.llm_with_tools = self.llm.bind_tools(tools) if tools else self.llm
         self.max_iterations = max_iterations
+        self._tool_cache: dict[str, str] = {}
         self._logger = get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
 
     def _create_llm(self, model: str, api_key: str | None, base_url: str | None) -> ChatOpenAI:
@@ -85,17 +89,27 @@ class BaseAgent(ABC):
         # 低层级：输入参数
         self._logger.debug(f"  参数: {tool_args}")
 
+        cache_key = self._build_tool_cache_key(tool_name, tool_args)
+        if cache_key is not None and cache_key in self._tool_cache:
+            cached = self._tool_cache[cache_key]
+            display_result = cached if len(cached) <= 500 else cached[:500] + "\n  ... [缓存截断]"
+            self._logger.debug(f"  命中缓存: {display_result}")
+            return cached
+
         if tool_name in self.tools:
             try:
                 result = self.tools[tool_name].invoke(tool_args)
+                result_str = str(result)
 
                 # 截断过长结果用于日志显示
-                display_result = str(result)
+                display_result = result_str
                 if len(display_result) > 500:
                     display_result = display_result[:500] + "\n  ... [截断]"
 
                 # 低层级：输出结果
                 self._logger.debug(f"  结果: {display_result}")
+                if cache_key is not None:
+                    self._tool_cache[cache_key] = result_str
                 return result
             except Exception as e:
                 self._logger.error(f"  ✗ 工具执行错误: {e}")
@@ -124,6 +138,15 @@ class BaseAgent(ABC):
                 elif isinstance(msg.content, list) and msg.content:
                     return msg
         raise RuntimeError("No AI message found in response")
+
+    def _build_tool_cache_key(self, tool_name: str, tool_args: Any) -> str | None:
+        if tool_name not in self.CACHEABLE_TOOLS:
+            return None
+        try:
+            normalized = json.dumps(tool_args, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            normalized = repr(tool_args)
+        return f"{tool_name}:{normalized}"
 
     @abstractmethod
     def get_system_prompt(self) -> str:

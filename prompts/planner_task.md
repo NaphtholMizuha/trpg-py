@@ -1,80 +1,75 @@
 DM指令: {user_input}
 
-请分析并生成自然语言任务描述。
+请分析并生成 Markdown 执行稿。
 
 工作流程：
 1. 使用工具查询需要的信息（fetch_keys/read/search）
-2. 检测可能的决策窗口（见下方"决策窗口检测"部分）
-3. 整合信息后，输出自然语言格式的任务描述
+2. 生成一份可执行的主线步骤稿
+3. 预埋可能的反应/连锁线索，但不要提前裁定结果
 
-## search 查询语言（重要）
+## 输出结构
 
-- 调用 `search` 时，默认使用中文查询，因为当前规则书 RAG 文档以中文内容为主
-- 优先查询中文规则词汇；只有在需要补充别名时才附带英文原名
-- 避免直接使用纯英文规则检索句
+必须严格输出以下 Markdown 结构：
 
-示例：
-- `魔法飞弹 伤害 5e`
-- `护盾术 魔法飞弹 5e`
-- `法术反制 反应 施法时 5e`
-- 如确有必要：`护盾术 Shield 魔法飞弹 5e`
+```markdown
+## Task Summary
+- Task ID: task_xxx
+- Description: <一句话任务描述>
+- Actor: <行动者>
+- Target: <目标，无则写“无”>
 
-## 决策窗口检测（重要）
+## Context
+- <关键状态或规则，每条尽量标明来源>
 
-当分析涉及攻击、施法、对抗或其他可能被打断/改判的互动行动时，
-必须检查是否存在可响应的决策窗口：
+## Execution Steps
+- [step_id: step_1] [status: pending] [phase: declare] [depends_on: none] [source: planner] <步骤标题> :: <执行说明>
+- [step_id: step_2] [status: pending] [phase: consequence] [depends_on: step_1] [source: planner] <步骤标题> :: <执行说明>
 
-1. **检查目标状态**：
-   - 目标是否有反应动作可用？
-   - 目标是否有准备法术或特殊反应能力？
-   - 目标是否知晓攻击来源？
+## Planner Hints
+- [hint_id: hint_1] [anchor: step_2] [when: before_step] [type: reaction] <可能插入的反应/连锁线索描述>
+- [hint_id: hint_none] [anchor: step_2] [when: none] [type: none] 无
 
-2. **识别重点**：
-   - 当前时机必须映射到以下标准 timing 之一：
-     - `before_action`: 动作刚声明，还没开始结算
-     - `before_resolution`: 动作已成立，但具体结果还没算完
-     - `before_consequence`: 后果即将应用，如伤害/状态/理智损失
-     - `after_consequence`: 后果已应用，开始处理余波
-     - `after_action`: 整个动作完全结束
-   - 谁可以做出响应？
-   - 响应动作/能力/裁定选项是什么？
-
-3. **输出格式**：
-   如果检测到决策窗口，在输出中添加：
-   ```
-   === 可能出现的决策点 ===
-   - [条件: 具体条件] [角色: 角色名] [时机: timing] [选项: 动作或能力名] 决策点描述
-   ```
-   - 如果某个响应动作本身还可能被再次响应，只能描述“存在后续决策窗口”
-   - 不要在主任务的决策点描述里提前写死嵌套响应的结果
-   - 错误示例：`护盾术会被法术反制打断，因此最终无效`
-   - 正确示例：`若目标选择施放护盾术，可能进一步触发法术反制的决策窗口`
-
-## 输出格式
-
+## Query Appendix
+<KV 查询结果和 RAG 检索原文>
 ```
-=== Task Metadata ===
-Task ID: task_xxx
-Task Description: 任务描述
-Action Type: 行动类型
-Actor: 行动者
-Target: 目标
 
-=== Context Information ===
-Related Values:
-- 相关属性 [Source: KV]
+约束：
+- 不要输出 JSON
+- 不要生成 decision point、resolution effect 等结构化窗口
+- `Execution Steps` 至少要有一个步骤
+- 初始 `Execution Steps` 只写主线已承诺执行的步骤
+- 护盾术、法术反制、借机攻击、连锁触发等“可插入片段”默认只能写进 `Planner Hints`
+- 不要把“检查是否触发某反应/某窗口”直接写成初始步骤
+- `Planner Hints` 只描述潜在线索，不描述最终结果
+- 第一个字符必须是 `#`
 
-Rule References:
-- 相关规则
+示例（重要，输出风格尽量贴近这个例子）：
 
-=== Execution Instructions ===
-执行指令
+```markdown
+## Task Summary
+- Task ID: task_magic_missile
+- Description: 马利克对艾尔德拉施放魔法飞弹
+- Actor: 马利克(Malik)
+- Target: 艾尔德拉(Aldera)
 
-=== 可能出现的决策点 ===
-- [条件: 目标可在伤害结算前响应] [角色: 艾尔德拉] [时机: before_consequence] [选项: 护盾术] 可在伤害结算前以护盾术改变结果
+## Context
+- 马利克拥有魔法飞弹 [Source: KV Malik.spells]
+- 艾尔德拉拥有护盾术 [Source: KV Aldera.spells]
+- 马利克拥有法术反制 [Source: KV Malik.spells]
+- 护盾术可在被作为魔法飞弹目标时以反应施放 [Source: RAG]
+- 法术反制可在看见60尺内生物施法时以反应施放 [Source: RAG]
 
-=== Original Query Appendix ===
-查询记录
+## Execution Steps
+- [step_id: step_1] [status: pending] [phase: declare] [depends_on: none] [source: planner] 宣告施法 :: 马利克对艾尔德拉施放魔法飞弹，并指定艾尔德拉为目标。
+- [step_id: step_2] [status: pending] [phase: consequence] [depends_on: step_1] [source: planner] 结算魔法飞弹结果 :: 按魔法飞弹规则结算其伤害与后续状态变化；若执行稿后续发生更新，则按最新执行稿推进。
+
+## Planner Hints
+- [hint_id: hint_1] [anchor: step_2] [when: before_step] [type: reaction] 艾尔德拉可能在魔法飞弹结果结算前插入护盾术相关片段。
+- [hint_id: hint_2] [anchor: step_2] [when: before_step] [type: reaction] 若护盾术开始施放，马利克可能进一步插入法术反制相关片段。
+
+## Query Appendix
+[KV] ...
+[RAG] ...
 ```
 
 请开始分析。
