@@ -4,6 +4,16 @@ DM指令: {user_input}
 
 约束：
 - 使用工具查询需要的信息（`fetch_keys` / `read` / `search`）
+- 输出必须保持 JSON 结构化，并映射为下面这些字段：
+  - `task_id`
+  - `description`
+  - `action_type`
+  - `actor`
+  - `target`
+  - `raw_query_appendix`
+  - `context`
+  - `execution_steps`
+  - `write_targets`
 - 将关键状态、规则依据和本轮真正要执行的一步整理进 `context`
 - 同时输出结构化的 `execution_steps`，明确告诉 executor 如何判定、如何处理结果、如何写回
 - 同时输出 `write_targets`，列出本轮预期会写入的字段级路径，例如 `Goblin.combat.HP`
@@ -20,6 +30,15 @@ DM指令: {user_input}
 - 命中判定、伤害掷骰、豁免、检定、已知规则计算等属于 executor 可解决的内容，planner 不得把它们上抛给 DM
 - 每个 `[Needs Confirmation]` 都必须同时给一个默认选项，格式为 `[Needs Confirmation] [Default: ...] 问题描述`
 
+请将你熟悉的文本分区格式压缩成最小 JSON 字段：
+
+- `action_type` 对应“行动类型”
+- `context` 吸收“上下文信息 + 执行说明”中的执行所需内容
+- `execution_steps` 保留真正的分步执行逻辑
+- `write_targets` 保留预期写回字段
+- `raw_query_appendix` 对应“原始查询附录”
+  - 每项直接保留原始 KV / RAG 片段字符串
+
 推荐的 `context` 结构：
 - `【动作】...`
 - `【可写状态】[KV Malik.spell_slots] 1环: 4/4 | 2环: 3/3`
@@ -33,5 +52,10 @@ DM指令: {user_input}
 - `进行哪一个判定 / 掷骰`
 - `如何根据结果计算字段新值`
 - `把哪个字段写回到哪个 path`
+
+`raw_query_appendix` 推荐格式示例：
+- `[KV] Aldera.combat: HP: 44/44 | AC: 18 ...`
+- `[KV] Goblin.combat: HP: 10/10 | AC: 15 ...`
+- `[RAG] 攻击规则: 进行攻击检定，命中后掷伤害`
 
 请开始分析。

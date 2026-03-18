@@ -37,6 +37,8 @@ class TaskExecution(BaseModel):
     task_id: str = ""
     description: str
     context: str
+    action_type: Literal["攻击", "施法", "移动", "检定", "交互", "自定义"] = "自定义"
+    raw_query_appendix: list[str] = Field(default_factory=list)
     execution_steps: list[str] = Field(default_factory=list)
     write_targets: list[str] = Field(default_factory=list)
     actor: str | None = None
@@ -53,7 +55,11 @@ class TaskExecution(BaseModel):
 
         normalized = dict(data)
 
-        for field_name in ("execution_steps", "write_targets"):
+        for field_name in (
+            "execution_steps",
+            "write_targets",
+            "raw_query_appendix",
+        ):
             value = normalized.get(field_name)
             if value is None or value == {}:
                 normalized[field_name] = []
