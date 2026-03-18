@@ -17,6 +17,7 @@ def _load_prompt(filename: str) -> str:
 
 # Agent System Prompts - 从文件加载
 EXECUTOR_SYSTEM_PROMPT = _load_prompt("executor.md")
+PLANNER_SYSTEM_PROMPT = _load_prompt("planner.md")
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class AppConfig:
     llm_model: str = "gpt-4o"
     llm_api_key: Optional[str] = None
     llm_base_url: Optional[str] = None
-    llm_provider: str = "openai"  # 支持: openai, deepseek, minimax, kimi
+    llm_provider: str = "openai"  # 支持: openai, deepseek, minimax, kimi, lingya
 
     # RAG 配置
     qdrant_url: str = "http://localhost:6333"
@@ -51,6 +52,7 @@ class AppConfig:
             "deepseek": "https://api.deepseek.com/v1",
             "minimax": "https://api.minimaxi.com/v1",
             "kimi": "https://api.kimi.com/coding/v1",
+            "lingya": "https://api.lingyaai.cn/v1",
             "openai": os.getenv("OPENAI_BASE_URL"),
         }.get(provider)
         return cls(
@@ -60,6 +62,7 @@ class AppConfig:
                 or os.getenv("OPENAI_API_KEY")
                 or os.getenv("KIMI_API_KEY")
                 or os.getenv("MINIMAX_API_KEY")
+                or os.getenv("LINGYA_API_KEY")
             ),
             llm_base_url=os.getenv("LLM_BASE_URL") or default_base_url,
             llm_provider=provider,
@@ -72,7 +75,7 @@ class AppConfig:
         """从提供商名称创建配置
 
         Args:
-            provider: 模型提供商，支持 "deepseek", "minimax", "kimi", "openai"
+            provider: 模型提供商，支持 "deepseek", "minimax", "kimi", "openai", "lingya"
         """
         provider = provider.lower()
 
@@ -104,5 +107,12 @@ class AppConfig:
                 llm_base_url="https://api.kimi.com/coding/v1",
                 llm_provider="kimi",
             )
+        elif provider == "lingya":
+            return cls(
+                llm_model="gpt-4o-mini",
+                llm_api_key=os.getenv("LINGYA_API_KEY"),
+                llm_base_url="https://api.lingyaai.cn/v1",
+                llm_provider="lingya",
+            )
         else:
-            raise ValueError(f"不支持的提供商: {provider}，支持: deepseek, minimax, kimi, openai")
+            raise ValueError(f"不支持的提供商: {provider}，支持: deepseek, minimax, kimi, openai, lingya")

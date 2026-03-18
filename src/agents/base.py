@@ -4,16 +4,74 @@ Agent 基类 - 封装 ReAct 循环和工具调用逻辑
 消除三个 Agent 之间的代码重复
 """
 from abc import ABC, abstractmethod
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 import json
+import os
+import re
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
+
+
+def _extract_json_payload(content: Any) -> str | None:
+    """从模型输出中提取 JSON，兼容 fenced code block。"""
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+        content = "\n".join(text_parts)
+
+    if not isinstance(content, str):
+        return None
+
+    text = content.strip()
+    if not text:
+        return None
+
+    fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        return fence_match.group(1).strip()
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        return text[start:end + 1].strip()
+
+    return None
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+            else:
+                text_parts.append(str(item))
+        return "\n".join(text_parts)
+    return str(content)
+
+
+def _preview_text(text: str, limit: int = 1500) -> str:
+    preview = text.strip()
+    if len(preview) <= limit:
+        return preview
+    return preview[:limit].rstrip() + "\n... [截断]"
 
 
 class BaseAgent(ABC):
@@ -38,6 +96,10 @@ class BaseAgent(ABC):
 
     def _create_llm(self, model: str, api_key: str | None, base_url: str | None) -> ChatOpenAI:
         """创建 LLM 实例"""
+        if not api_key and not base_url and not os.getenv("OPENAI_API_KEY"):
+            raise ValueError("未提供 API key，且环境变量 OPENAI_API_KEY 未设置")
+        if not api_key and base_url and not os.getenv("OPENAI_API_KEY"):
+            raise ValueError(f"未提供 API key，无法初始化 OpenAI 兼容模型客户端 (base_url={base_url})")
         kwargs: dict[str, Any] = {"model": model, "temperature": 0, "api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -76,6 +138,83 @@ class BaseAgent(ABC):
             messages.append(response)
 
         return self._extract_final_message(messages)
+
+    def _react_loop_structured(
+        self,
+        messages: list,
+        schema: type[StructuredOutputT],
+        force_output_prompt: str = "请直接输出结构化结果",
+    ) -> StructuredOutputT:
+        """执行工具循环后，用结构化输出生成最终结果。"""
+        response: AIMessage | None = None
+        for i in range(self.max_iterations):
+            response = cast(AIMessage, self.llm_with_tools.invoke(messages))
+            messages.append(response)
+
+            if not response.tool_calls:
+                break
+
+            for tool_call in response.tool_calls:
+                result = self._execute_tool(tool_call)
+                messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
+
+        if response is None:
+            raise RuntimeError("No AI response found in structured react loop")
+
+        if self._should_force_output(i, response):
+            messages.append(HumanMessage(content=force_output_prompt))
+        else:
+            messages.append(HumanMessage(content=force_output_prompt))
+
+        return self._invoke_structured_output(messages, schema)
+
+    def _invoke_structured_output(
+        self,
+        messages: list,
+        schema: type[StructuredOutputT],
+    ) -> StructuredOutputT:
+        """优先使用 provider 原生 json schema，失败时逐步回退。"""
+        try:
+            return self._require_structured_result(
+                self.llm.with_structured_output(schema, method="json_schema").invoke(messages),
+                schema,
+            )
+        except Exception as exc:
+            self._logger.warning(f"json_schema structured output 失败，回退默认模式: {exc}")
+        try:
+            return self._require_structured_result(
+                self.llm.with_structured_output(schema, method="function_calling").invoke(messages),
+                schema,
+            )
+        except Exception as exc:
+            self._logger.warning(f"function_calling structured output 失败，回退默认模式: {exc}")
+        try:
+            return self._require_structured_result(
+                self.llm.with_structured_output(schema).invoke(messages),
+                schema,
+            )
+        except Exception as exc:
+            self._logger.warning(f"default structured output 失败，尝试手工解析: {exc}")
+
+        raw_response = cast(AIMessage, self.llm.invoke(messages))
+        raw_text = _content_to_text(raw_response.content)
+        self._logger.warning(
+            "structured output 原始返回如下，将尝试手工解析:\n" + _preview_text(raw_text)
+        )
+        json_payload = _extract_json_payload(raw_response.content)
+        if not json_payload:
+            raise ValueError("未能从模型输出中提取 JSON")
+        self._logger.warning("structured output 提取出的 JSON:\n" + _preview_text(json_payload))
+        return schema.model_validate(json.loads(json_payload))
+
+    def _require_structured_result(
+        self,
+        result: Any,
+        schema: type[StructuredOutputT],
+    ) -> StructuredOutputT:
+        if result is None:
+            raise ValueError(f"{schema.__name__} structured output returned None")
+        return cast(StructuredOutputT, result)
 
     def _execute_tool(self, tool_call: Any) -> str:
         """执行单个工具调用"""

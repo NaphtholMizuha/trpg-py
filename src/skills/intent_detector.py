@@ -87,7 +87,7 @@ DM指令: "{user_input}"
 1. world_edit: DM直接修改游戏世界状态，绕过正常游戏规则（如"set HP to 0", "生成怪物", "直接杀死"）
 2. combat: 标准游戏流程，需要掷骰和规则判定（如"攻击", "施法", "检定"）
 
-只输出skill名称（combat 或 trpg-world-edit），不要解释。"""
+只输出skill名称（combat 或 world_edit），不要解释。"""
 
         messages = [
             SystemMessage(content="你是一个TRPG意图分类器。只输出skill名称，不要任何解释。"),
@@ -106,14 +106,14 @@ DM指令: "{user_input}"
         # 映射可能的变体
         name_mapping = {
             "combat": "combat",
-            "world_edit": "trpg-world-edit",
-            "trpg-world-edit": "trpg-world-edit",
-            "world edit": "trpg-world-edit",
+            "world_edit": "world_edit",
+            "trpg-world-edit": "world_edit",
+            "world edit": "world_edit",
         }
 
         normalized_name = name_mapping.get(skill_name, skill_name)
 
-        if normalized_name == "trpg-world-edit":
+        if normalized_name == "world_edit":
             return "world_edit", self._registry.get_world_edit_skill()
         elif normalized_name == "combat":
             return "standard", self._registry.get_combat_skill()

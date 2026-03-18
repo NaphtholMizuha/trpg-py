@@ -2,7 +2,7 @@
 LangGraph 工作流组装 - 最小骨架
 
 核心流程:
-planner -> task_approval -> executor -> planner
+planner -> task_approval -> executor -> commiter -> planner
 """
 from langgraph.graph import StateGraph
 from langgraph.checkpoint.memory import MemorySaver
@@ -10,13 +10,10 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from ..types import (
     AgentState,
+    ExecutionResult,
     StateChange,
     Operation,
-    PlannedTask,
-    ExecutionScriptState,
-    ExecutionStep,
-    StepUpdate,
-    ProposedFragment,
+    TaskExecution,
 )
 from ..agents import create_deep_planner_agent, ExecutorAgent
 from ..tools.toolkit import TrpgToolkit
@@ -25,6 +22,7 @@ from ..config import AppConfig
 from .nodes import (
     create_planner_node,
     create_task_approval_node,
+    create_commiter_node,
     create_executor_node,
 )
 
@@ -62,25 +60,23 @@ def create_workflow(
         model=config.llm_model,
         api_key=config.llm_api_key,
         base_url=config.llm_base_url,
-        tools=[tool_map["evaluate"], tool_map["write_fields"]],
+        tools=[tool_map["evaluate"]],
     )
 
     workflow = StateGraph(AgentState)
     workflow.add_node("planner", create_planner_node(planner_agent))
     workflow.add_node("task_approval", create_task_approval_node())
-    workflow.add_node("executor", create_executor_node(executor_agent, toolkit.store))
+    workflow.add_node("executor", create_executor_node(executor_agent))
+    workflow.add_node("commiter", create_commiter_node(tool_map["write_fields"]))
 
     workflow.set_entry_point("planner")
 
     serde = JsonPlusSerializer(
         allowed_msgpack_modules=[
+            ExecutionResult,
             StateChange,
             Operation,
-            PlannedTask,
-            ExecutionScriptState,
-            ExecutionStep,
-            StepUpdate,
-            ProposedFragment,
+            TaskExecution,
         ]
     )
     memory = MemorySaver(serde=serde)

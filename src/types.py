@@ -1,14 +1,12 @@
 """
-核心类型定义
-
-当前版本使用 Markdown 执行稿 + 受限 patch 来驱动执行流。
+核心类型定义。
 """
-from typing import TypedDict, Annotated, Any
-from dataclasses import dataclass, field
+from typing import TypedDict, Annotated, Any, Literal
 from enum import Enum
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Operation(Enum):
@@ -19,97 +17,101 @@ class Operation(Enum):
     DEL = "DEL"
 
 
-@dataclass
-class StateChange:
+class StateChange(BaseModel):
     """统一的状态变更记录。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     path: str
-    old_value: Any
-    new_value: Any
+    old_value: str | None = None
+    new_value: str | None = None
     operation: Operation
     source: str = ""
 
 
-STEP_PHASES = {"declare", "choice", "action", "resolution"}
+class TaskExecution(BaseModel):
+    """Planner 输出并在工作流中流转的单步任务。"""
 
+    model_config = ConfigDict(extra="forbid")
 
-@dataclass
-class ExecutionStep:
-    """执行稿中的单个步骤。"""
-
-    step_id: str
-    title: str
-    instruction: str
-    status: str = "pending"  # pending | in_progress | completed | blocked
-    phase: str = "declare"  # declare | choice | action | resolution
-    depends_on: list[str] = field(default_factory=list)
-    source: str = "planner"  # planner | rework
-
-
-@dataclass
-class StepUpdate:
-    """Executor 对步骤状态的更新。"""
-
-    step_id: str
-    status: str
-    note: str = ""
-
-
-@dataclass
-class ProposedFragment:
-    """Executor 提出的可选新增效果。"""
-
-    anchor_step_id: str
-    insert_position: str  # before | after | replace_children
-    reason: str
-    fragment_summary: str
-    required_context_keys: list[str] = field(default_factory=list)
-    status: str = "pending"
-    dm_note: str | None = None
-    choice_title: str | None = None
-    choice_prompt: str | None = None
-    choice_response: str | None = None
-
-
-@dataclass
-class PlannedTask:
-    """统一任务描述。"""
-
-    task_id: str
+    task_id: str = ""
     description: str
-    context: str  # planner 产出的 Markdown 执行稿
+    context: str
+    execution_steps: list[str] = Field(default_factory=list)
+    write_targets: list[str] = Field(default_factory=list)
     actor: str | None = None
     target: str | None = None
-    source: str = "dm"  # dm | chain | system
+    source: Literal["dm", "chain", "system"] = "dm"
     dm_notes: str | None = None
-    task_category: str = "normal"  # normal | world_edit
-    task_status: str = "pending"  # pending | completed | cancelled
-    approval_granted: bool = False
+    task_category: Literal["normal", "world_edit"] = "normal"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_loose_task(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+
+        for field_name in ("execution_steps", "write_targets"):
+            value = normalized.get(field_name)
+            if value is None or value == {}:
+                normalized[field_name] = []
+            elif isinstance(value, str):
+                normalized[field_name] = [value]
+
+        return normalized
 
 
-@dataclass
-class ExecutionScriptState:
-    """运行时执行稿状态。"""
+class TriggeredChain(BaseModel):
+    """Executor 返回的后续链式任务。"""
 
-    task_id: str
-    steps: list[ExecutionStep] = field(default_factory=list)
-    active_step_id: str | None = None
-    script_markdown: str = ""
-    history: list[str] = field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = ""
+    description: str
+    context: str = ""
+    actor: str | None = None
+    target: str | None = None
+    dm_notes: str | None = None
+    task_category: Literal["normal", "world_edit"] = "normal"
 
 
-@dataclass
-class ExecutionResult:
+class ExecutionResult(BaseModel):
     """ExecutorAgent 执行结果。"""
 
-    task_id: str
-    success: bool
-    field_changes: list[StateChange]
-    narration: str
-    step_updates: list[StepUpdate] = field(default_factory=list)
-    proposed_fragment: ProposedFragment | None = None
-    triggered_chains: list[dict[str, Any]] = field(default_factory=list)
-    execution_context: dict[str, Any] = field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = ""
+    success: bool = False
+    field_changes: list[StateChange] = Field(default_factory=list)
+    narration: str = ""
+    triggered_chains: list[TriggeredChain] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_loose_result(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+
+        field_changes = normalized.get("field_changes")
+        if field_changes is None or field_changes == {}:
+            normalized["field_changes"] = []
+        elif isinstance(field_changes, dict):
+            normalized["field_changes"] = [field_changes]
+
+        triggered_chains = normalized.get("triggered_chains")
+        if triggered_chains is None or triggered_chains == {}:
+            normalized["triggered_chains"] = []
+        elif isinstance(triggered_chains, dict):
+            normalized["triggered_chains"] = [triggered_chains]
+
+        if normalized.get("narration") is None:
+            normalized["narration"] = ""
+
+        return normalized
 
 
 class AgentState(TypedDict):
@@ -117,9 +119,7 @@ class AgentState(TypedDict):
 
     messages: Annotated[list[BaseMessage], add_messages]
     changes: Annotated[list[StateChange], lambda x, y: x + y]
-    task_queue: list[PlannedTask]
-    _current_task: PlannedTask | None
+    task_queue: list[TaskExecution]
+    _current_task: TaskExecution | None
     _planned_message_count: int
-    _execution_script: ExecutionScriptState | None
-    _execution_context: dict[str, Any] | None
-    _context_cache: dict[str, dict[str, Any]]
+    _execution_result: ExecutionResult | None

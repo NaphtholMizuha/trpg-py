@@ -1,12 +1,7 @@
-请直接输出 Markdown 执行稿，不要继续调用工具。
+请直接给出最终任务结果，不要继续调用工具。
 
 ⚠️ 重要：
 - 不要添加开场白、解释或总结
-- 第一个字符必须是 `#`
-- 必须包含 `## Task Summary`
-- 必须包含 `## Context`
-- 必须包含 `## Execution Steps`
-- 必须包含 `## Planner Hints`
-- 必须包含 `## Query Appendix`
-- 不允许输出旧格式标题，如 `=== 任务元数据 ===`
-- 如果你不确定具体内容，也必须按 Markdown 结构输出最小可用脚本，而不是解释原因
+- 只返回当前这一轮的一步任务
+- `context` 要足够让 executor 直接执行
+- 如果信息不完整，也要给出最小可用结果，并在 `context` 中标记 `[Needs Confirmation] [Default: ...]`

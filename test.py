@@ -7,6 +7,7 @@
   python test.py --provider deepseek        # 使用 deepseek-chat
   python test.py --provider minimax         # 使用 MiniMax-M2.5
   python test.py --provider kimi            # 使用 kimi-for-coding
+  python test.py --provider lingya          # 使用 gpt-4o-mini (灵鸭代理)
   python test.py --provider openai          # 使用 openai
 
 当前脚本重点观察：
@@ -19,6 +20,7 @@
   DEEPSEEK_BASE_URL     - DeepSeek API 地址（可选，默认 https://api.deepseek.com/v1）
   MINIMAX_API_KEY       - MiniMax API 密钥
   KIMI_API_KEY          - Kimi API 密钥
+  LINGYA_API_KEY        - 灵鸭 API 密钥
   OPENAI_API_KEY        - OpenAI API 密钥
   OPENAI_BASE_URL       - OpenAI API 地址（可选）
 """
@@ -63,8 +65,7 @@ console = Console()
 class Scenario:
     name: str
     user_input: str
-    objective: str
-    expected_now: str
+
 
 
 def print_header(title: str):
@@ -76,8 +77,6 @@ def print_scenario_notes(scenario: Scenario):
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold yellow", width=10)
     table.add_column(style="white")
-    table.add_row("观察目标", scenario.objective)
-    table.add_row("当前预期", scenario.expected_now)
     console.print(Panel(table, title=f"场景: {scenario.name}", border_style="blue"))
 
 
@@ -233,8 +232,8 @@ def main(
     ),
 ):
     provider = provider.lower()
-    if provider not in {"deepseek", "minimax", "kimi", "openai"}:
-        raise typer.BadParameter("provider 必须是 deepseek / minimax / kimi / openai")
+    if provider not in {"deepseek", "minimax", "kimi", "openai", "lingya"}:
+        raise typer.BadParameter("provider 必须是 deepseek / minimax / kimi / openai / lingya")
 
     # 只有在没有 --manual 参数时才设置自动确认
     if not manual:
@@ -258,6 +257,13 @@ def main(
             llm_api_key=os.getenv("MINIMAX_API_KEY"),
             llm_base_url="https://api.minimaxi.com/v1",
         )
+    elif provider == "lingya":
+        config = replace(
+            config,
+            llm_model="gpt-4o-mini",
+            llm_api_key=os.getenv("LINGYA_API_KEY"),
+            llm_base_url="https://api.lingyaai.cn/v1",
+        )
 
     # 加载世界状态
     console.print("\n[bold blue]加载世界状态[/bold blue]...")
@@ -270,10 +276,13 @@ def main(
             "deepseek": "DEEPSEEK_API_KEY",
             "minimax": "MINIMAX_API_KEY",
             "kimi": "KIMI_API_KEY",
+            "lingya": "LINGYA_API_KEY",
             "openai": "OPENAI_API_KEY"
         }
         env_var = provider_env.get(provider, "API_KEY")
-        console.print(f"\n[yellow]未配置 {env_var}，将使用 fallback 模式[/yellow]")
+        console.print(f"\n[bold red]未配置 {env_var}，无法创建工作流[/bold red]")
+        console.print(f"请先在环境变量中设置 {env_var}，然后重新运行。")
+        raise typer.Exit(code=1)
 
     console.print("\n[bold blue]创建工作流[/bold blue]...")
     workflow, store = create_workflow(
@@ -286,10 +295,8 @@ def main(
 
     scenario = Scenario(
         name="magic_missile_shield_counterspell",
-        user_input="马利克对艾尔德拉施放魔法飞弹。",
-        objective="观察在 DM 只描述主动作时，combat skill 是否仍能依据状态与规则自行推导出护盾术与法术反制这条响应链。",
-        expected_now="理想情况下，即使 DM 没有额外提醒，也能先看到围绕魔法飞弹主步骤的执行稿，以及指向护盾术/法术反制的 Planner Hints；执行阶段应稳定推进，或在无法推进时直接结束当前任务，而不是进入返工/补丁流程。"
-    )
+        user_input="艾尔德拉用长剑攻击哥布林。",
+)
 
     run_scenario(workflow, store, scenario, "scene_magic_missile_shield_counterspell")
 

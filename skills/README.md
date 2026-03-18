@@ -27,10 +27,11 @@ skills/
 ---
 name: skill-name-in-kebab-case
 description: 描述skill的功能和使用场景，用于意图识别
-trigger_keywords:
-  - keyword1
-  - keyword2
-  - 关键词3
+metadata:
+  trigger_keywords:
+    - keyword1
+    - keyword2
+    - 关键词3
 ---
 
 ## 指令内容
@@ -54,7 +55,7 @@ trigger_keywords:
 - 生成自然语言任务描述
 - 检测连锁反应和可能的反应
 
-### trpg-world-edit
+### world_edit
 
 **用途**: 处理DM直接世界状态修改（set, create, delete等）
 
@@ -105,7 +106,7 @@ result1 = planner.plan("艾尔德拉攻击地精")
 
 # 世界编辑指令
 result2 = planner.plan("set goblin HP to 0")
-# 使用trpg-world-edit skill
+# 使用world_edit skill
 ```
 
 ### 直接使用意图识别
@@ -115,7 +116,7 @@ from src.skills import detect_intent
 
 intent_type, skill = detect_intent("生成一个新怪物")
 print(intent_type)  # "world_edit"
-print(skill.name)   # "trpg-world-edit"
+print(skill.name)   # "world_edit"
 ```
 
 ## 添加新Skill
@@ -131,11 +132,12 @@ print(skill.name)   # "trpg-world-edit"
 ---
 name: dice-history
 description: 查询历史骰子记录和统计信息
-trigger_keywords:
-  - history
-  - 历史
-  - 统计
-  - 之前投了多少
+metadata:
+  trigger_keywords:
+    - history
+    - 历史
+    - 统计
+    - 之前投了多少
 ---
 
 ## 历史查询指令
@@ -159,7 +161,7 @@ PlannerAgent.plan()
     │   ├── Generate natural language task
     │   └── Return PlannedTask
     │
-    └── World Edit Flow (trpg-world-edit)
+    └── World Edit Flow (world_edit)
         ├── Parse direct modification
         ├── Generate JSON field changes
         └── Return PlannedTask (with dm_override)

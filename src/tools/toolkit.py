@@ -161,7 +161,7 @@ class FetchKeysTool(BaseTool):
         keys = self.store.get_keys()
         if not keys:
             return "当前没有可用的keys"
-        return "可用的keys:\n" + "\n".join(keys)
+        return "可用的keys:\n" + "\n".join(sorted(keys))
 
 
 class WriteTool(BaseTool):
@@ -356,4 +356,8 @@ def _is_safe_evaluate_expression(expression: str) -> bool:
     has_roll = "Roll(" in expr
     has_numeric_or_bool = bool(re.search(r"\d", expr) or re.search(r"(True|False|and|or|not)\b", expr))
     has_operator = bool(re.search(r"[+\-*/%]|<=|>=|==|!=|<|>", expr))
+    if re.fullmatch(r"Roll\(\s*['\"]\d+d\d+['\"]\s*\)", expr):
+        return True
+    if re.fullmatch(r"\d+(\.\d+)?", expr):
+        return True
     return (has_roll or has_numeric_or_bool) and has_operator

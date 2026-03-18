@@ -16,6 +16,7 @@ class Skill:
     description: str
     content: str
     trigger_keywords: list[str] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
 
 class SkillRegistry:
@@ -59,11 +60,16 @@ class SkillRegistry:
         except yaml.YAMLError:
             return None
 
+        metadata = metadata or {}
+        extra_metadata = metadata.get("metadata", {}) or {}
+        trigger_keywords = metadata.get("trigger_keywords", extra_metadata.get("trigger_keywords", []))
+
         return Skill(
             name=metadata.get("name", filepath.parent.name),
             description=metadata.get("description", ""),
-            trigger_keywords=metadata.get("trigger_keywords", []),
-            content=md_content
+            trigger_keywords=trigger_keywords,
+            content=md_content,
+            metadata=extra_metadata,
         )
 
     def get_skill(self, name: str) -> Optional[Skill]:
@@ -76,7 +82,7 @@ class SkillRegistry:
 
     def get_world_edit_skill(self) -> Optional[Skill]:
         """获取world_edit skill"""
-        return self._skills.get("trpg-world-edit")
+        return self._skills.get("world_edit") or self._skills.get("trpg-world-edit")
 
     def list_skills(self) -> list[str]:
         """列出所有skill名称"""
