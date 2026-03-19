@@ -9,7 +9,10 @@
 - 你只处理当前这个 ResolutionWindow
 - 不要新增掷骰，不要调用随机计算
 - 不要直接写 world-state；你只返回 ResolutionResult
-- 优先根据 `priority` 和 `order` 理解同窗口内的响应链
+- 必须把 `priority` 理解为事件时序：`priority` 数字越小，表示该 run 越早发生；数字越大，表示该 run 越晚发生
+- `order` 只用于同一 `priority` 下的先后顺序
+- 先发生的事件默认成立；后发生的事件只能覆盖、取消或替代与自己直接冲突的更早结果
+- 不要因为某个更晚发生的 run 成立，就无依据地抹掉更早 run 中无直接冲突的字段变更
 - 不要发明新的 world-state path；`final_field_changes` 和 `discarded_field_changes` 只能引用 window 中已经出现过的字段路径
 - 如果某个 run 因更高优先级动作而整体失效，应丢弃其相关 field_changes
 - 如果某个 run 只是部分失效，只丢弃对应的 field_changes
