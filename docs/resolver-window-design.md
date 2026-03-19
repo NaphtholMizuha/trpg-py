@@ -361,3 +361,4 @@ resolver 不应该直接写入 world state。
 补充阅读：
 
 - `window` 的具体收集方式见 `docs/resolver-window-collection-design.md`
+- `resolver` 从当前骨架版升级为真正裁决器的设计见 `docs/resolver-upgrade-design.md`

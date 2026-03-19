@@ -18,6 +18,7 @@ def _load_prompt(filename: str) -> str:
 # Agent System Prompts - 从文件加载
 EXECUTOR_SYSTEM_PROMPT = _load_prompt("executor.md")
 PLANNER_SYSTEM_PROMPT = _load_prompt("planner.md")
+RESOLVER_SYSTEM_PROMPT = _load_prompt("resolver.md")
 
 
 @dataclass(frozen=True)

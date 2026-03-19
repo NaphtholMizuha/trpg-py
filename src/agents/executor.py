@@ -98,20 +98,17 @@ class ExecutorAgent(BaseAgent):
             SystemMessage(content=self.SYSTEM_PROMPT),
             HumanMessage(content=task_prompt),
         ]
-        original_llm_with_tools = self.llm_with_tools
-        if not self._task_requires_evaluate(task):
-            self.llm_with_tools = self.llm
+        tools_for_call = self._tools if self._task_requires_evaluate(task) else []
         try:
-            result = self._react_loop_structured(
-                messages,
-                ExecutionResult,
+            result = self._invoke_agent(
+                messages=messages,
+                tools=tools_for_call,
+                response_format=ExecutionResult,
                 force_output_prompt=FORCE_OUTPUT_PROMPT,
             )
         except Exception as exc:
-            logger.error("Executor structured output 失败", error=str(exc))
+            logger.exception(f"Executor structured output 失败: {exc}")
             return self._build_fallback_result(task)
-        finally:
-            self.llm_with_tools = original_llm_with_tools
 
         result.task_id = task.task_id
         for change in result.field_changes:

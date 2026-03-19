@@ -1,0 +1,6 @@
+请直接给出最终 ResolutionResult，不要继续调用工具。
+
+⚠️ 重要：
+- 只判断当前 ResolutionWindow 内哪些字段变更最终有效
+- 不要新增窗口外的后续结果
+- 无法确定的内容写进 `dm_suggestions`

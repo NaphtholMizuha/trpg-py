@@ -42,6 +42,11 @@ try:
 except ImportError:
     load_dotenv = None
 
+try:
+    import questionary
+except ImportError:
+    questionary = None
+
 if load_dotenv is not None:
     load_dotenv()
 
@@ -92,15 +97,57 @@ def extract_markdown_section(markdown: str, title: str) -> str:
     return section.strip()
 
 
+def _select_prompt(message: str, choices: list[str], default: str) -> str:
+    if questionary is not None:
+        return questionary.select(
+            message,
+            choices=choices,
+            default=default,
+            qmark="",
+            use_indicator=True,
+        ).ask() or default
+    return Prompt.ask(message, choices=choices, default=default)
+
+
+def _text_prompt(message: str, default: str = "") -> str:
+    if questionary is not None:
+        return questionary.text(
+            message,
+            default=default,
+            qmark="",
+        ).ask() or default
+    return Prompt.ask(message, default=default)
+
+
 def prompt_approval() -> dict[str, str]:
-    action = Prompt.ask(
-        "[bold]审批操作[/bold]",
-        choices=["approve", "reject", "modify"],
-        default="approve",
-    )
+    action = _select_prompt("审批操作", ["approve", "reject", "modify"], "approve")
     if action == "modify":
-        suggestion = Prompt.ask("修改建议", default="")
+        suggestion = _text_prompt("修改建议", default="")
         return {"action": "modify", "suggestion": suggestion}
+    return {"action": action}
+
+
+def prompt_window_review(default_priority: int | None = None) -> dict[str, str | int]:
+    action = _select_prompt(
+        "窗口操作",
+        ["close_window", "append_same_window_action"],
+        "close_window",
+    )
+    if action == "append_same_window_action":
+        user_input = _text_prompt("追加动作")
+        priority_text = _text_prompt(
+            "该动作 priority",
+            default=str(default_priority if default_priority is not None else 5),
+        )
+        try:
+            priority = int(priority_text)
+        except ValueError:
+            priority = default_priority if default_priority is not None else 5
+        return {
+            "action": action,
+            "user_input": user_input,
+            "priority": priority,
+        }
     return {"action": action}
 
 
@@ -201,6 +248,25 @@ def run_scenario(workflow, store, scenario: Scenario, thread_id: str):
                         current_input = Command(resume=prompt_approval())
                         continue
 
+                if interrupt_type == "resolution_window_review":
+                    console.print(f"\n[bold yellow]结算窗口检查[/bold yellow] [dim](Interrupt #{interrupt_count})[/dim]")
+                    console.print(f"  窗口: {interrupt_info.get('window_id', 'N/A')}")
+                    console.print(f"  根动作: {interrupt_info.get('root_description', 'N/A')}")
+                    latest_run = interrupt_info.get("latest_run", {})
+                    console.print(f"  最新 run: {latest_run.get('description', 'N/A')}")
+                    console.print(f"  narration: {latest_run.get('narration', 'N/A')}")
+                    console.print(f"  选项: {interrupt_info.get('options', [])}")
+
+                    if os.getenv("TRPG_AUTO_CONFIRM") == "1":
+                        console.print("  [green]自动关闭当前窗口[/green]")
+                        current_input = Command(resume={"action": "close_window"})
+                        continue
+                    else:
+                        current_input = Command(
+                            resume=prompt_window_review(interrupt_info.get("default_priority"))
+                        )
+                        continue
+
             # 打印队列状态
             queue = output.get("task_queue", [])
             if queue and len(queue) > 0:
@@ -242,6 +308,8 @@ def main(
     else:
         os.environ.pop("TRPG_AUTO_CONFIRM", None)
         console.print("[yellow]手动审批模式[/yellow]")
+        if questionary is None:
+            console.print("[yellow]Questionary 未安装，当前回退到普通文本输入交互。[/yellow]")
 
     print_header("TRPG 阶段化结算观察")
     console.print(f"  LLM 提供商: [bold]{provider}[/bold]")
@@ -295,7 +363,7 @@ def main(
 
     scenario = Scenario(
         name="magic_missile_shield_counterspell",
-        user_input="炸药桶爆炸，结算伤害",
+        user_input="马利克对艾尔德拉施放魔法飞弹",
 )
 
     run_scenario(workflow, store, scenario, "scene_magic_missile_shield_counterspell")

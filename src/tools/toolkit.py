@@ -15,6 +15,9 @@ from langchain_core.tools import BaseTool, BaseToolkit
 from .logic import LogicEngine
 from .rag import Retriever
 from .kv_state import KVStateStore
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # ============================================
@@ -77,24 +80,33 @@ class SearchTool(BaseTool):
     retriever: Retriever = Field(exclude=True)
 
     def _run(self, query: str, limit: int = 2) -> str:
-        results = self.retriever.search(query, limit=limit)
-        if not results:
-            return "未找到相关结果"
+        _log_tool_start(self.name, query=query, limit=limit)
+        try:
+            results = self.retriever.search(query, limit=limit)
+            if not results:
+                output = "未找到相关结果"
+                _log_tool_success(self.name, output)
+                return output
 
-        output_lines = []
-        for i, result in enumerate(results, 1):
-            score = result.get("score", 0)
-            content = _truncate_text(result.get("content", ""), 220)
-            metadata = result.get("metadata", {})
-            title = metadata.get("title", "无标题")
-            file = metadata.get("file", "未知")
+            output_lines = []
+            for i, result in enumerate(results, 1):
+                score = result.get("score", 0)
+                content = _truncate_text(result.get("content", ""), 220)
+                metadata = result.get("metadata", {})
+                title = metadata.get("title", "无标题")
+                file = metadata.get("file", "未知")
 
-            output_lines.append(f"[{i}] {title} (来源: {file}, 相关性: {score:.2f})")
-            output_lines.append(content)
+                output_lines.append(f"[{i}] {title} (来源: {file}, 相关性: {score:.2f})")
+                output_lines.append(content)
 
-            output_lines.append("")
+                output_lines.append("")
 
-        return "\n".join(output_lines)
+            output = "\n".join(output_lines)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 class EvaluateTool(BaseTool):
@@ -109,13 +121,19 @@ class EvaluateTool(BaseTool):
     logic_engine: LogicEngine = Field(exclude=True)
 
     def _run(self, expression: str) -> str:
-        if not _is_safe_evaluate_expression(expression):
-            return "执行错误: 非法表达式，仅允许掷骰、数值计算或真假判断"
         try:
+            _log_tool_start(self.name, expression=expression)
+            if not _is_safe_evaluate_expression(expression):
+                output = "执行错误: 非法表达式，仅允许掷骰、数值计算或真假判断"
+                _log_tool_success(self.name, output)
+                return output
             result = self.logic_engine.eval(expression)
-            return f"结果: {result.result}\n轨迹: {result.resolved}"
-        except Exception as e:
-            return f"执行错误: {e}"
+            output = f"结果: {result.result}\n轨迹: {result.resolved}"
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            return f"执行错误: {exc}"
 
 
 class ReadTool(BaseTool):
@@ -139,14 +157,21 @@ class ReadTool(BaseTool):
     store: KVStateStore = Field(exclude=True)
 
     def _run(self, keys: list[str]) -> str:
-        results = []
-        for key in keys:
-            value = self.store.get(key)
-            if value:
-                results.append(f"[{key}] {_truncate_text(value, 160)}")
-            else:
-                results.append(f"[{key}] 不存在")
-        return "\n".join(results)
+        _log_tool_start(self.name, keys=keys)
+        try:
+            results = []
+            for key in keys:
+                value = self.store.get(key)
+                if value:
+                    results.append(f"[{key}] {_truncate_text(value, 160)}")
+                else:
+                    results.append(f"[{key}] 不存在")
+            output = "\n".join(results)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 class FetchKeysTool(BaseTool):
@@ -158,10 +183,19 @@ class FetchKeysTool(BaseTool):
     store: KVStateStore = Field(exclude=True)
 
     def _run(self) -> str:
-        keys = self.store.get_keys()
-        if not keys:
-            return "当前没有可用的keys"
-        return "可用的keys:\n" + "\n".join(sorted(keys))
+        _log_tool_start(self.name)
+        try:
+            keys = self.store.get_keys()
+            if not keys:
+                output = "当前没有可用的keys"
+                _log_tool_success(self.name, output)
+                return output
+            output = "可用的keys:\n" + "\n".join(sorted(keys))
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 class WriteTool(BaseTool):
@@ -185,26 +219,35 @@ class WriteTool(BaseTool):
     store: KVStateStore = Field(exclude=True)
 
     def _run(self, operations: list[dict]) -> str:
-        success, changes = self.store.patch(operations)
+        _log_tool_start(self.name, operations=operations)
+        try:
+            success, changes = self.store.patch(operations)
 
-        if not changes:
-            return "未应用任何变更"
+            if not changes:
+                output = "未应用任何变更"
+                _log_tool_success(self.name, output)
+                return output
 
-        lines = []
-        for c in changes:
-            if c.operation == "ADD":
-                new_preview = (c.new_value[:50] + "...") if c.new_value else "None"
-                lines.append(f"✓ ADD [{c.key}] = {new_preview}")
-            elif c.operation == "MOD":
-                old_preview = (c.old_value[:30] + "...") if c.old_value else "None"
-                new_preview = (c.new_value[:50] + "...") if c.new_value else "None"
-                lines.append(f"✓ MOD [{c.key}]: {old_preview} → {new_preview}")
-            elif c.operation == "DEL":
-                old_preview = (c.old_value[:50] + "...") if c.old_value else "None"
-                lines.append(f"✓ DEL [{c.key}] (原值: {old_preview})")
+            lines = []
+            for c in changes:
+                if c.operation == "ADD":
+                    new_preview = (c.new_value[:50] + "...") if c.new_value else "None"
+                    lines.append(f"✓ ADD [{c.key}] = {new_preview}")
+                elif c.operation == "MOD":
+                    old_preview = (c.old_value[:30] + "...") if c.old_value else "None"
+                    new_preview = (c.new_value[:50] + "...") if c.new_value else "None"
+                    lines.append(f"✓ MOD [{c.key}]: {old_preview} → {new_preview}")
+                elif c.operation == "DEL":
+                    old_preview = (c.old_value[:50] + "...") if c.old_value else "None"
+                    lines.append(f"✓ DEL [{c.key}] (原值: {old_preview})")
 
-        status = "成功" if success else "部分失败"
-        return f"[{status}] 应用了 {len(changes)} 个变更:\n" + "\n".join(lines)
+            status = "成功" if success else "部分失败"
+            output = f"[{status}] 应用了 {len(changes)} 个变更:\n" + "\n".join(lines)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 class WriteFieldsTool(BaseTool):
@@ -236,62 +279,66 @@ field_changes: [
     def _run(self, field_changes: list[dict]) -> str:
         from ..utils.kv_patch import KVPatch
 
-        if not field_changes:
-            return "无字段变更需要应用"
+        _log_tool_start(self.name, field_changes=field_changes)
+        try:
+            if not field_changes:
+                output = "无字段变更需要应用"
+                _log_tool_success(self.name, output)
+                return output
 
-        applied_count = 0
-        lines = []
+            applied_count = 0
+            lines = []
 
-        for fc in field_changes:
-            try:
-                # 支持 key+field 或 path 两种格式
-                key = fc.get("key", "")
-                field = fc.get("field", "")
-                path = fc.get("path", "")
+            for fc in field_changes:
+                try:
+                    # 支持 key+field 或 path 两种格式
+                    key = fc.get("key", "")
+                    field = fc.get("field", "")
+                    path = fc.get("path", "")
 
-                # 如果提供了 path，从中提取 key 和 field
-                if path and not key:
-                    parts = path.rsplit(".", 1)
-                    if len(parts) == 2:
-                        key, field = parts
+                    # 如果提供了 path，从中提取 key 和 field
+                    if path and not key:
+                        parts = path.rsplit(".", 1)
+                        if len(parts) == 2:
+                            key, field = parts
+                        else:
+                            key = path
+                            field = ""
+
+                    old_value = fc.get("old_value", "")
+                    new_value = fc.get("new_value", "")
+                    operation = fc.get("operation", "MOD")
+
+                    if not key or key.startswith("task_") or key not in self.store.get_keys():
+                        raise ValueError("只允许写入已存在的 world-state key")
+                    if not field:
+                        raise ValueError("字段级写入必须提供 field")
+
+                    current_full = self.store.get(key) or ""
+                    patch = KVPatch(current_full)
+
+                    if operation == "DEL":
+                        patch.remove_field(field)
                     else:
-                        key = path
-                        field = ""
+                        patch.set_field(field, new_value)
 
-                old_value = fc.get("old_value", "")
-                new_value = fc.get("new_value", "")
-                operation = fc.get("operation", "MOD")
+                    new_full = patch.to_string()
+                    self.store.set(key, new_full)
 
-                if not key or key.startswith("task_") or key not in self.store.get_keys():
-                    raise ValueError("只允许写入已存在的 world-state key")
-                if not field:
-                    raise ValueError("字段级写入必须提供 field")
+                    applied_count += 1
+                    lines.append(f"✓ {key}.{field}: {old_value} → {new_value}")
 
-                # 读取当前完整值
-                current_full = self.store.get(key) or ""
+                except Exception as exc:
+                    err_key = key or fc.get("key", "?") or fc.get("path", "?")
+                    err_field = field or fc.get("field", "?")
+                    lines.append(f"✗ {err_key}.{err_field}: 失败 - {exc}")
 
-                # 应用补丁
-                patch = KVPatch(current_full)
-
-                if operation == "DEL":
-                    patch.remove_field(field)
-                else:
-                    patch.set_field(field, new_value)
-
-                new_full = patch.to_string()
-
-                # 写回 KV
-                self.store.set(key, new_full)
-
-                applied_count += 1
-                lines.append(f"✓ {key}.{field}: {old_value} → {new_value}")
-
-            except Exception as e:
-                err_key = key or fc.get('key', '?') or fc.get('path', '?')
-                err_field = field or fc.get('field', '?')
-                lines.append(f"✗ {err_key}.{err_field}: 失败 - {e}")
-
-        return f"[成功] 应用了 {applied_count}/{len(field_changes)} 个字段变更:\n" + "\n".join(lines)
+            output = f"[成功] 应用了 {applied_count}/{len(field_changes)} 个字段变更:\n" + "\n".join(lines)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 # ============================================
@@ -335,6 +382,26 @@ def _truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "... [截断]"
+
+
+def _truncate_repr(value: object, limit: int = 200) -> str:
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "... [截断]"
+
+
+def _log_tool_start(tool_name: str, **kwargs: object) -> None:
+    payload = {key: _truncate_repr(value) for key, value in kwargs.items()}
+    logger.info(f"▶ 调用工具 [{tool_name}]", tool=tool_name, args=payload)
+
+
+def _log_tool_success(tool_name: str, result: str) -> None:
+    logger.debug(f"✓ 工具完成 [{tool_name}]", tool=tool_name, result=_truncate_text(result, 300))
+
+
+def _log_tool_error(tool_name: str, exc: Exception) -> None:
+    logger.exception(f"✗ 工具失败 [{tool_name}]: {exc}", tool=tool_name)
 
 
 def _is_safe_evaluate_expression(expression: str) -> bool:

@@ -1,6 +1,7 @@
 from src.agents.base import _extract_json_payload
 from src.agents.deep_planner import DeepPlannerAgent
 from src.agents.executor import ExecutorAgent
+from src.agents.resolver import ResolverAgent
 from src.types import (
     DiscardedStateChange,
     ExecutionResult,
@@ -216,3 +217,100 @@ def test_discarded_state_change_extends_state_change_contract():
 
     assert change.discarded_by == "resolver:window_demo"
     assert change.reason == "护盾术未能成功生效。"
+
+
+def test_resolver_builds_path_hints_from_window_changes():
+    agent = object.__new__(ResolverAgent)
+    window = ResolutionWindow(
+        window_id="window_demo",
+        root_task_id="task_magic_missile",
+        root_description="马利克对艾尔德拉施放魔法飞弹",
+        shared_context=[],
+        runs=[
+            ResolutionWindowRun(
+                order=0,
+                priority=10,
+                task_id="task_magic_missile",
+                description="马利克对艾尔德拉施放魔法飞弹",
+                field_changes=[
+                    {
+                        "path": "Aldera.combat.HP",
+                        "old_value": "44/44",
+                        "new_value": "33/44",
+                        "operation": "MOD",
+                        "source": "task_magic_missile",
+                    }
+                ],
+            )
+        ],
+    )
+
+    hints = agent._build_path_hints(window)
+
+    assert "Aldera.combat.HP" in hints
+
+
+def test_resolver_sanitizes_unknown_paths_and_sets_resolver_metadata():
+    agent = object.__new__(ResolverAgent)
+    window = ResolutionWindow(
+        window_id="window_demo",
+        root_task_id="task_magic_missile",
+        root_description="马利克对艾尔德拉施放魔法飞弹",
+        shared_context=[],
+        runs=[
+            ResolutionWindowRun(
+                order=0,
+                priority=10,
+                task_id="task_magic_missile",
+                description="马利克对艾尔德拉施放魔法飞弹",
+                field_changes=[
+                    {
+                        "path": "Aldera.combat.HP",
+                        "old_value": "44/44",
+                        "new_value": "33/44",
+                        "operation": "MOD",
+                        "source": "task_magic_missile",
+                    }
+                ],
+            )
+        ],
+    )
+    result = ResolutionResult(
+        window_id="wrong_window",
+        final_field_changes=[
+            {
+                "path": "Aldera.combat.HP",
+                "old_value": "44/44",
+                "new_value": "33/44",
+                "operation": "MOD",
+                "source": "",
+            },
+            {
+                "path": "Unknown.path",
+                "old_value": "x",
+                "new_value": "y",
+                "operation": "MOD",
+                "source": "",
+            },
+        ],
+        discarded_field_changes=[
+            {
+                "path": "Aldera.combat.HP",
+                "old_value": "44/44",
+                "new_value": "33/44",
+                "operation": "MOD",
+                "source": "task_magic_missile",
+                "reason": "被护盾术覆盖。",
+            }
+        ],
+        resolution_summary="",
+        dm_suggestions=["", "请 DM 确认护盾术是否成功。"],
+    )
+
+    sanitized = agent._sanitize_result(result, window)
+
+    assert sanitized.final_field_changes[0].source == "resolver:window_demo"
+    assert len(sanitized.final_field_changes) == 1
+    assert sanitized.discarded_field_changes[0].discarded_by == "resolver:window_demo"
+    assert sanitized.resolution_summary == "resolver 完成了当前结算窗口的合并裁决。"
+    assert sanitized.dm_suggestions == ["请 DM 确认护盾术是否成功。"]

@@ -30,7 +30,19 @@ FORCE_OUTPUT_PROMPT = (_PROMPT_DIR / "force_output" / "planner.txt").read_text(e
 class DeepPlannerAgent(BaseAgent):
     """支持多 skill 的规划 Agent。"""
 
-    CACHEABLE_TOOLS = {"fetch_keys", "read", "search"}
+    _COMMON_FIELD_HINTS = (
+        "临时HP",
+        "HP",
+        "临时AC加值",
+        "AC",
+        "反应",
+        "附赠动作",
+        "护盾术状态",
+        "状态",
+        "位置",
+        "速度",
+        "先攻调整值",
+    )
 
     def __init__(
         self,
@@ -67,14 +79,14 @@ class DeepPlannerAgent(BaseAgent):
             HumanMessage(content=TASK_TEMPLATE.format(user_input=user_input)),
         ]
         try:
-            task = self._react_loop_structured(
-                messages,
-                TaskExecution,
+            task = self._invoke_agent(
+                messages=messages,
+                response_format=TaskExecution,
                 force_output_prompt=FORCE_OUTPUT_PROMPT,
             )
             return [self._normalize_task(self._ensure_task_id(task))]
         except Exception as exc:
-            self._logger.warning("Planner structured output 失败，已回退", error=str(exc))
+            self._logger.exception(f"Planner structured output 失败，已回退: {exc}")
             return [self._build_fallback_task(user_input, intent_type=intent_type)]
 
     def _ensure_task_id(self, task: TaskExecution) -> TaskExecution:
@@ -95,7 +107,159 @@ class DeepPlannerAgent(BaseAgent):
             if inferred:
                 task.target = inferred
 
+        task.write_targets = self._normalize_write_targets(task)
         return task
+
+    def _normalize_write_targets(self, task: TaskExecution) -> list[str]:
+        context_keys = self._extract_context_keys(task.context)
+        context_key_set = set(context_keys)
+        normalized_targets: list[str] = []
+        seen: set[str] = set()
+
+        for target in task.write_targets or []:
+            path = (target or "").strip()
+            if not path:
+                continue
+
+            if self._is_field_level_path(path):
+                self._append_unique(normalized_targets, seen, path)
+                continue
+
+            if path not in context_key_set:
+                continue
+
+            inferred_fields = self._infer_fields_for_root(task, path)
+            for field in inferred_fields:
+                self._append_unique(normalized_targets, seen, f"{path}.{field}")
+
+        return normalized_targets
+
+    def _infer_fields_for_root(self, task: TaskExecution, root_key: str) -> list[str]:
+        available_fields = self._extract_kv_fields(task.context, root_key)
+        if not available_fields:
+            return []
+
+        ordered_blobs = [
+            task.description,
+            task.context,
+            *task.execution_steps,
+            *task.raw_query_appendix,
+        ]
+
+        if root_key.endswith(".spell_slots"):
+            levels = self._extract_ordered_mentions(
+                "\n".join(blob for blob in ordered_blobs if blob),
+                [field for field in available_fields if re.fullmatch(r"\d+环", field)],
+            )
+            if levels:
+                return levels
+
+        referenced_fields = self._extract_fields_near_root(root_key, ordered_blobs, available_fields)
+        if referenced_fields:
+            return referenced_fields
+
+        mentioned_fields = self._extract_ordered_mentions(
+            "\n".join(blob for blob in ordered_blobs if blob),
+            available_fields,
+        )
+        if mentioned_fields:
+            return mentioned_fields
+
+        return available_fields[:1]
+
+    def _extract_context_keys(self, text: str) -> list[str]:
+        if not text:
+            return []
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for key in re.findall(r"\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]", text):
+            if key not in seen:
+                seen.add(key)
+                ordered.append(key)
+        return ordered
+
+    def _extract_kv_fields(self, context: str, root_key: str) -> list[str]:
+        if not context or not root_key:
+            return []
+
+        match = re.search(rf"\[KV {re.escape(root_key)}\]\s*([^\n]+)", context)
+        if not match:
+            return []
+
+        fields: list[str] = []
+        seen: set[str] = set()
+        for chunk in match.group(1).split("|"):
+            part = chunk.strip()
+            if ":" not in part:
+                continue
+            field_name = part.split(":", 1)[0].strip()
+            if not field_name or field_name in seen:
+                continue
+            seen.add(field_name)
+            fields.append(field_name)
+        return fields
+
+    def _extract_fields_near_root(
+        self,
+        root_key: str,
+        blobs: list[str],
+        available_fields: list[str],
+    ) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        escaped_root = re.escape(root_key)
+        patterns = (
+            rf"\[KV {escaped_root}\]\s*([^\n]+)",
+            rf"更新\[{escaped_root}\]\s*([^\n。；]*)",
+            rf"更新{escaped_root}\s*([^\n。；]*)",
+        )
+
+        for blob in blobs:
+            if not blob:
+                continue
+            for pattern in patterns:
+                for match in re.finditer(pattern, blob):
+                    nearby_text = match.group(1)
+                    for field in self._extract_ordered_mentions(nearby_text, available_fields):
+                        if field in seen:
+                            continue
+                        seen.add(field)
+                        ordered.append(field)
+        return ordered
+
+    def _extract_ordered_mentions(self, text: str, candidates: list[str]) -> list[str]:
+        if not text:
+            return []
+
+        matches: list[tuple[int, str]] = []
+        seen: set[str] = set()
+
+        for candidate in candidates:
+            idx = text.find(candidate)
+            if idx == -1 or candidate in seen:
+                continue
+            seen.add(candidate)
+            matches.append((idx, candidate))
+
+        for candidate in self._COMMON_FIELD_HINTS:
+            if candidate in seen or candidate not in candidates:
+                continue
+            idx = text.find(candidate)
+            if idx == -1:
+                continue
+            seen.add(candidate)
+            matches.append((idx, candidate))
+
+        matches.sort(key=lambda item: item[0])
+        return [candidate for _, candidate in matches]
+
+    def _is_field_level_path(self, path: str) -> bool:
+        return len(path.split(".")) >= 3
+
+    def _append_unique(self, items: list[str], seen: set[str], value: str) -> None:
+        if value and value not in seen:
+            seen.add(value)
+            items.append(value)
 
     def _extract_kv_roots(self, text: str) -> list[str]:
         if not text:

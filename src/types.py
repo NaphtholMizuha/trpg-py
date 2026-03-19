@@ -3,6 +3,7 @@
 """
 from typing import TypedDict, Annotated, Any, Literal
 from enum import Enum
+import re
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -37,6 +38,31 @@ class StateChange(BaseModel):
     source: str = ""
 
 
+def _stringify_change_values(items: Any) -> Any:
+    """将 field_changes / discarded_field_changes 中的 old/new value 归一为字符串。"""
+    if items is None or items == {}:
+        return []
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return items
+
+    normalized_items: list[Any] = []
+    for item in items:
+        if not isinstance(item, dict):
+            normalized_items.append(item)
+            continue
+
+        normalized_item = dict(item)
+        for value_key in ("old_value", "new_value"):
+            value = normalized_item.get(value_key)
+            if value is None or isinstance(value, str):
+                continue
+            normalized_item[value_key] = str(value)
+        normalized_items.append(normalized_item)
+    return normalized_items
+
+
 class TaskExecution(BaseModel):
     """Planner 输出并在工作流中流转的单步任务。"""
 
@@ -45,7 +71,7 @@ class TaskExecution(BaseModel):
     task_id: str = ""
     description: str
     context: str
-    action_type: Literal["攻击", "施法", "移动", "检定", "交互", "自定义"] = "自定义"
+    action_type: str = "自定义"
     raw_query_appendix: list[str] = Field(default_factory=list)
     execution_steps: list[str] = Field(default_factory=list)
     write_targets: list[str] = Field(default_factory=list)
@@ -110,11 +136,7 @@ class ExecutionResult(BaseModel):
 
         normalized = dict(data)
 
-        field_changes = normalized.get("field_changes")
-        if field_changes is None or field_changes == {}:
-            normalized["field_changes"] = []
-        elif isinstance(field_changes, dict):
-            normalized["field_changes"] = [field_changes]
+        normalized["field_changes"] = _stringify_change_values(normalized.get("field_changes"))
 
         triggered_chains = normalized.get("triggered_chains")
         if triggered_chains is None or triggered_chains == {}:
@@ -139,8 +161,8 @@ class ResolutionWindowRun(BaseModel):
     description: str
     actor: str | None = None
     target: str | None = None
-    success: bool = False
     narration: str = ""
+    state_snapshot: dict[str, str] = Field(default_factory=dict)
     field_changes: list[StateChange] = Field(default_factory=list)
     triggered_chains: list[TriggeredChain] = Field(default_factory=list)
 
@@ -152,11 +174,11 @@ class ResolutionWindowRun(BaseModel):
 
         normalized = dict(data)
 
-        field_changes = normalized.get("field_changes")
-        if field_changes is None or field_changes == {}:
-            normalized["field_changes"] = []
-        elif isinstance(field_changes, dict):
-            normalized["field_changes"] = [field_changes]
+        state_snapshot = normalized.get("state_snapshot")
+        if state_snapshot is None or state_snapshot == {}:
+            normalized["state_snapshot"] = {}
+
+        normalized["field_changes"] = _stringify_change_values(normalized.get("field_changes"))
 
         triggered_chains = normalized.get("triggered_chains")
         if triggered_chains is None or triggered_chains == {}:
@@ -186,8 +208,8 @@ class ResolutionWindowRun(BaseModel):
             description=task.description,
             actor=task.actor,
             target=task.target,
-            success=result.success,
             narration=result.narration,
+            state_snapshot=_build_task_state_snapshot(task),
             field_changes=result.field_changes,
             triggered_chains=result.triggered_chains,
         )
@@ -203,6 +225,7 @@ class ResolutionWindow(BaseModel):
     root_description: str
     status: WindowStatus = WindowStatus.OPEN
     shared_context: list[str] = Field(default_factory=list)
+    state_snapshot: dict[str, str] = Field(default_factory=dict)
     runs: list[ResolutionWindowRun] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -218,6 +241,10 @@ class ResolutionWindow(BaseModel):
             normalized["shared_context"] = []
         elif isinstance(shared_context, str):
             normalized["shared_context"] = [shared_context]
+
+        state_snapshot = normalized.get("state_snapshot")
+        if state_snapshot is None or state_snapshot == {}:
+            normalized["state_snapshot"] = {}
 
         runs = normalized.get("runs")
         if runs is None or runs == {}:
@@ -254,17 +281,11 @@ class ResolutionResult(BaseModel):
 
         normalized = dict(data)
 
-        final_field_changes = normalized.get("final_field_changes")
-        if final_field_changes is None or final_field_changes == {}:
-            normalized["final_field_changes"] = []
-        elif isinstance(final_field_changes, dict):
-            normalized["final_field_changes"] = [final_field_changes]
+        normalized["final_field_changes"] = _stringify_change_values(normalized.get("final_field_changes"))
 
-        discarded_field_changes = normalized.get("discarded_field_changes")
-        if discarded_field_changes is None or discarded_field_changes == {}:
-            normalized["discarded_field_changes"] = []
-        elif isinstance(discarded_field_changes, dict):
-            normalized["discarded_field_changes"] = [discarded_field_changes]
+        normalized["discarded_field_changes"] = _stringify_change_values(
+            normalized.get("discarded_field_changes")
+        )
 
         dm_suggestions = normalized.get("dm_suggestions")
         if dm_suggestions is None or dm_suggestions == {}:
@@ -287,3 +308,55 @@ class AgentState(TypedDict):
     _current_task: TaskExecution | None
     _planned_message_count: int
     _execution_result: ExecutionResult | None
+    active_window: ResolutionWindow | None
+    pending_resolution: ResolutionResult | None
+    pending_window_priority: int | None
+    window_counter: int
+
+
+def _build_task_state_snapshot(task: TaskExecution) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for item in task.raw_query_appendix:
+        if not isinstance(item, str):
+            continue
+        match = _match_kv_appendix(item)
+        if match is None:
+            continue
+        key, value = match
+        snapshot[key] = value
+
+    for raw_line in task.context.splitlines():
+        match = _match_context_kv_line(raw_line)
+        if match is None:
+            continue
+        key, value = match
+        snapshot.setdefault(key, value)
+
+    return snapshot
+
+
+def _match_kv_appendix(text: str) -> tuple[str, str] | None:
+    match = text.strip()
+    if not match.startswith("[KV] "):
+        return None
+    payload = match[len("[KV] "):]
+    if ":" not in payload:
+        return None
+    key, value = payload.split(":", 1)
+    key = key.strip()
+    value = value.strip()
+    if not key or not value:
+        return None
+    return key, value
+
+
+def _match_context_kv_line(text: str) -> tuple[str, str] | None:
+    match = text.strip()
+    kv_match = re.match(r".*\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]\s*(.+)", match)
+    if kv_match is None:
+        return None
+    key = kv_match.group(1).strip()
+    value = kv_match.group(2).strip()
+    if not key or not value:
+        return None
+    return key, value
