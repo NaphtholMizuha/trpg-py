@@ -8,8 +8,9 @@ TrpgToolkit - 极简工具箱
 - write: ADD/MOD/DEL 状态变更
 """
 import re
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool, BaseToolkit
 
 from .logic import LogicEngine
@@ -78,13 +79,79 @@ class SearchTool(BaseTool):
     args_schema: type[BaseModel] = SearchInput
 
     retriever: Retriever = Field(exclude=True)
+    _session_search_count: int = PrivateAttr(default=0)
+    _session_results: list[tuple[str, str]] = PrivateAttr(default_factory=list)
+    _max_session_searches: int = PrivateAttr(default=3)
+
+    def reset_session(self) -> None:
+        self._session_search_count = 0
+        self._session_results = []
+
+    def _normalize_query(self, query: str) -> str:
+        text = (query or "").lower()
+        text = re.sub(r"[\"'`]+", " ", text)
+        text = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", " ", text)
+        return " ".join(text.split())
+
+    def _build_query_ngrams(self, query: str) -> set[str]:
+        compact = query.replace(" ", "")
+        if not compact:
+            return set()
+        if len(compact) < 4:
+            return {compact}
+        return {compact[idx:idx + 2] for idx in range(len(compact) - 1)}
+
+    def _is_similar_query(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        if left == right:
+            return True
+        if left in right or right in left:
+            return True
+
+        left_ngrams = self._build_query_ngrams(left)
+        right_ngrams = self._build_query_ngrams(right)
+        if not left_ngrams or not right_ngrams:
+            return False
+
+        overlap = len(left_ngrams & right_ngrams)
+        union = len(left_ngrams | right_ngrams)
+        similarity = overlap / union if union else 0.0
+        return similarity >= 0.55
+
+    def _find_cached_result(self, normalized_query: str) -> str | None:
+        for previous_query, previous_result in self._session_results:
+            if self._is_similar_query(normalized_query, previous_query):
+                return previous_result
+        return None
 
     def _run(self, query: str, limit: int = 2) -> str:
         _log_tool_start(self.name, query=query, limit=limit)
         try:
+            normalized_query = self._normalize_query(query)
+            cached_result = self._find_cached_result(normalized_query)
+            if cached_result is not None:
+                output = (
+                    "检测到与本轮已检索问题高度相似，直接复用上一条检索结果。"
+                    " 若仍不能确定，请停止继续 search，并改为输出 [Needs Confirmation]。\n\n"
+                    f"{cached_result}"
+                )
+                _log_tool_success(self.name, output)
+                return output
+
+            if self._session_search_count >= self._max_session_searches:
+                output = (
+                    "本轮 search 次数已达到上限，请基于现有检索结果收口。"
+                    " 如果仍存在未决规则点，请改为输出 [Needs Confirmation]。"
+                )
+                _log_tool_success(self.name, output)
+                return output
+
             results = self.retriever.search(query, limit=limit)
+            self._session_search_count += 1
             if not results:
                 output = "未找到相关结果"
+                self._session_results.append((normalized_query, output))
                 _log_tool_success(self.name, output)
                 return output
 
@@ -102,6 +169,7 @@ class SearchTool(BaseTool):
                 output_lines.append("")
 
             output = "\n".join(output_lines)
+            self._session_results.append((normalized_query, output))
             _log_tool_success(self.name, output)
             return output
         except Exception as exc:
@@ -307,7 +375,7 @@ field_changes: [
 
                     old_value = fc.get("old_value", "")
                     new_value = fc.get("new_value", "")
-                    operation = fc.get("operation", "MOD")
+                    operation = str(fc.get("operation", "MOD")).upper()
 
                     if not key or key.startswith("task_") or key not in self.store.get_keys():
                         raise ValueError("只允许写入已存在的 world-state key")
@@ -316,7 +384,10 @@ field_changes: [
 
                     current_full = self.store.get(key) or ""
                     patch = KVPatch(current_full)
+                    field_exists = patch.has_field(field)
 
+                    if operation in {"MOD", "DEL"} and not field_exists:
+                        raise ValueError("MOD/DEL 只能作用于已存在字段")
                     if operation == "DEL":
                         patch.remove_field(field)
                     else:

@@ -2,6 +2,7 @@ from src.agents.base import _extract_json_payload
 from src.agents.deep_planner import DeepPlannerAgent
 from src.agents.executor import ExecutorAgent
 from src.agents.resolver import ResolverAgent
+from src.tools.toolkit import SearchTool, WriteFieldsTool
 from src.types import (
     DiscardedStateChange,
     ExecutionResult,
@@ -11,6 +12,38 @@ from src.types import (
     ResolutionWindowRun,
     TaskExecution,
 )
+
+
+class _FakeStore:
+    def __init__(self, data: dict[str, str]):
+        self._data = data
+
+    def get_multi(self, keys: list[str]) -> dict[str, str]:
+        return {key: value for key, value in self._data.items() if key in keys}
+
+    def get_keys(self) -> list[str]:
+        return list(self._data.keys())
+
+    def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self._data[key] = value
+
+
+class _FakeRetriever:
+    def __init__(self):
+        self.calls: list[tuple[str, int]] = []
+
+    def search(self, query: str, limit: int = 2):
+        self.calls.append((query, limit))
+        return [
+            {
+                "score": 0.9,
+                "content": f"关于 {query} 的检索结果",
+                "metadata": {"title": "规则片段", "file": "rules.md"},
+            }
+        ]
 
 
 def test_extract_json_payload_from_fenced_block():
@@ -47,6 +80,81 @@ def test_executor_accepts_narration_only_result():
     assert agent._is_actionable_result(result) is True
 
 
+def test_executor_rejects_modifying_missing_spell_slot_field():
+    agent = object.__new__(ExecutorAgent)
+    task = TaskExecution(
+        task_id="task_demo",
+        description="艾尔德拉施放圣火术点燃火药桶",
+        context=(
+            "【可写状态】[KV Aldera.spell_slots] 1环: 4/4 | 2环: 2/2\n"
+            "【参考状态】[KV Aldera.spells] 戏法: 圣火术 | DC: 15 | 法术攻击: +7"
+        ),
+        execution_steps=[],
+        write_targets=["Aldera.spell_slots.戏法"],
+        actor="Aldera",
+        target="Barrel",
+        source="dm",
+        task_category="normal",
+    )
+    result = ExecutionResult(
+        task_id="task_demo",
+        success=True,
+        field_changes=[
+            {
+                "path": "Aldera.spell_slots.戏法",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "task_demo",
+            }
+        ],
+        narration="错误地扣减了戏法法术位。",
+        triggered_chains=[],
+    )
+
+    sanitized = agent._sanitize_result(result, task)
+
+    assert sanitized.field_changes == []
+
+
+def test_executor_accepts_explicit_add_for_missing_field():
+    agent = object.__new__(ExecutorAgent)
+    task = TaskExecution(
+        task_id="task_demo",
+        description="给火药桶新增燃烧层数字段",
+        context=(
+            "【可写状态】[KV Barrel.status] 火药桶 | 状态: 未爆炸\n"
+            "【可新增字段】Barrel.status.燃烧层数"
+        ),
+        execution_steps=[],
+        write_targets=["Barrel.status.燃烧层数"],
+        actor="Aldera",
+        target="Barrel",
+        source="dm",
+        task_category="normal",
+    )
+    result = ExecutionResult(
+        task_id="task_demo",
+        success=True,
+        field_changes=[
+            {
+                "path": "Barrel.status.燃烧层数",
+                "old_value": "",
+                "new_value": "1",
+                "operation": "ADD",
+                "source": "task_demo",
+            }
+        ],
+        narration="给火药桶新增燃烧层数。",
+        triggered_chains=[],
+    )
+
+    sanitized = agent._sanitize_result(result, task)
+
+    assert len(sanitized.field_changes) == 1
+    assert sanitized.field_changes[0].path == "Barrel.status.燃烧层数"
+
+
 def test_planner_fills_missing_task_id():
     agent = object.__new__(DeepPlannerAgent)
     task = TaskExecution(
@@ -59,6 +167,56 @@ def test_planner_fills_missing_task_id():
     filled = agent._ensure_task_id(task)
 
     assert filled.task_id.startswith("task_")
+
+
+def test_planner_normalize_write_targets_does_not_crash_on_field_path():
+    agent = object.__new__(DeepPlannerAgent)
+    agent.tools = {}
+    task = TaskExecution(
+        task_id="task_demo",
+        description="点燃火药桶",
+        context="【可写状态】[KV Barrel.status] 火药桶 | 状态: 未爆炸",
+        execution_steps=[],
+        write_targets=["Barrel.status.状态"],
+        actor="Aldera",
+        target="Barrel",
+        source="dm",
+        task_category="normal",
+    )
+
+    normalized = agent._normalize_task(task)
+
+    assert normalized.write_targets == ["Barrel.status.状态"]
+
+
+def test_write_fields_tool_rejects_adding_unknown_spell_slot_field():
+    tool = WriteFieldsTool(store=_FakeStore({"Aldera.spell_slots": "1环: 4/4 | 2环: 2/2"}))
+
+    output = tool._run(
+        [
+            {
+                "path": "Aldera.spell_slots.戏法",
+                "old_value": "",
+                "new_value": "3/4",
+                "operation": "ADD",
+            }
+        ]
+    )
+
+    assert "成功" in output
+    assert "Aldera.spell_slots.戏法" in output
+
+
+def test_search_tool_reuses_similar_query_within_session():
+    retriever = _FakeRetriever()
+    tool = SearchTool(retriever=retriever)
+
+    first = tool._run("圣火术 点燃 物体", limit=2)
+    second = tool._run("圣火术 对物体 目标", limit=2)
+
+    assert "规则片段" in first
+    assert "直接复用上一条检索结果" in second
+    assert len(retriever.calls) == 1
 
 
 def test_execution_result_normalizes_loose_json_shapes():
@@ -99,6 +257,7 @@ def test_executor_builds_explicit_key_hints():
 
 def test_planner_normalizes_actor_target_from_kv_context():
     agent = object.__new__(DeepPlannerAgent)
+    agent.tools = {}
     task = TaskExecution(
         task_id="task_demo",
         description="马利克对艾尔德拉施放魔法飞弹",
@@ -118,6 +277,39 @@ def test_planner_normalizes_actor_target_from_kv_context():
 
     assert normalized.actor == "Malik"
     assert normalized.target == "Aldera"
+
+
+def test_planner_hydrates_kv_lines_from_store_snapshot():
+    agent = object.__new__(DeepPlannerAgent)
+    agent.tools = {
+        "read": type(
+            "FakeReadTool",
+            (),
+            {
+                "store": _FakeStore(
+                    {
+                        "Aldera.spells": "戏法: 圣火术 | 1环法术: 神恩、护盾术、圣光术 | 2环法术: 迷雾步、branding smite | DC: 15 | 法术攻击: +7",
+                    }
+                )
+            },
+        )()
+    }
+    task = TaskExecution(
+        task_id="task_demo",
+        description="艾尔德拉施放圣火术",
+        context="【参考状态】[KV Aldera.spells] 法术: 圣火术 | 1环法术: 神恩、护盾术、圣光术 | 2环法术: 迷雾步、branding smite | DC: 15 | 法术攻击: +7",
+        actor="Aldera",
+        target="Barrel",
+        source="dm",
+        task_category="normal",
+    )
+
+    normalized = agent._normalize_task(task)
+
+    assert (
+        normalized.context
+        == "【参考状态】[KV Aldera.spells] 戏法: 圣火术 | 1环法术: 神恩、护盾术、圣光术 | 2环法术: 迷雾步、branding smite | DC: 15 | 法术攻击: +7"
+    )
 
 
 def test_resolution_window_normalizes_loose_json_shapes():

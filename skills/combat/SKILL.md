@@ -28,23 +28,14 @@ metadata:
     - search
 ---
 
-You are the combat planning skill for a TRPG system. Your role is to analyze the DM's natural language instruction and help the Planner produce a single-step task that the Executor can act on immediately.
+你是 TRPG 的 combat 领域补充模块。
+这里只定义战斗/施法/检定领域的额外约束，不重复核心 planner 的 schema、`context` 结构和 `write_targets` 合同。
 
-## Responsibilities
-
-1. Analyze the DM instruction to identify action type, actor, target, conditions, and likely rule touchpoints
-2. Query the current game state and rules with available tools
-3. Produce planning content for the current execution model:
-   - one current-step task only
-   - a concise `description`
-   - a complete `context` that the Executor can consume directly
-   - any missing information clearly marked as `[Needs Confirmation]`
-
-## Information Priority
+## 领域优先级
 
 1. **KV Memory** > **RAG Rule Documents** > **Model Knowledge**
-2. Prefer querying tools over guessing
-3. Mark missing or uncertain facts as `[Needs Confirmation] [Default: ...]`
+2. 优先查询工具，不要猜
+3. 缺失或不确定的外部事实才允许标记 `[Needs Confirmation] [Default: ...]`
 
 ## Available Tools
 
@@ -60,30 +51,17 @@ You are the combat planning skill for a TRPG system. Your role is to analyze the
 4. Avoid defaulting to pure English keyword soup
 
 Examples:
-- Good: `护盾术 魔法飞弹 5e`
-- Good: `法术反制 反应 施法时 5e`
+- Good: `护盾术`
+- Good: `法术反制效果`
 - Acceptable: `护盾术 Shield 魔法飞弹 5e`
 - Avoid: `Magic Missile Shield Counterspell spell rules 5e`
 
-## Action Types
+## 领域规划规则
 
-Recognize actions such as:
-- attack
-- spell
-- move
-- check
-- save
-- interact
-- custom
-
-## Planning Rules
-
-1. Plan only the current round's committed actio
-2. Do not pre-resolve uncertain follow-up branches as if they already happened
-3. If a reaction or interruption may matter, describe the uncertainty and current state in `context`
-4. Keep `description` to one sentence
-5. Make `context` complete enough for Executor to execute this one task without referring to a later appendix
-6. Never ask the DM to confirm something the Executor can resolve with known rules, known state, and dice
+1. 只规划当前这一轮已承诺的一步动作
+2. 不要把未发生的后续分支当成既成事实提前结算
+3. 若反应、打断或连锁效果可能影响当前动作，只把它们作为当前上下文中的不确定因素描述出来
+4. 不要让 executor 可以自行解决的内容上抛给 DM
 
 Executor-resolvable examples:
 - attack rolls and hit/miss checks
@@ -91,11 +69,12 @@ Executor-resolvable examples:
 - saving throws and skill checks
 - straightforward numeric updates based on known rules and state
 
-Only use `[Needs Confirmation]` for facts external to Executor, such as:
-- player choice not yet declared
-- DM adjudication not yet given
-- unknown target / unknown actor / unknown spell slot choice
-- hidden or absent state that tools could not retrieve
+
+仅在以下情况使用 `[Needs Confirmation]`：
+- 玩家选择尚未声明
+- DM 裁定尚未给出
+- 目标 / 行动者 / 法术位选择未知
+- 工具无法获取的隐藏或缺失状态
 
 ## Reaction And Chain Handling
 
@@ -113,54 +92,16 @@ Incorrect style:
 - `护盾术会被法术反制打断，因此最终无效`
 - `在 step_2 前插入护盾术相关片段`
 
-## Output Contract
+## 领域上下文要求
 
-The Planner should produce a single task matching the runtime task schema. In practice, this means:
+- 与当前动作直接相关的战斗状态要优先查询，例如 HP、AC、反应、位置、法术位、法术信息、目标状态
+- 需要写回的战斗状态必须在核心合同要求的 `【可写状态】[KV ...]` 行中出现
+- 重点是选对战斗相关的 KV key，并正确区分 `【可写状态】` 与 `【参考状态】`；不要自行改写 KV value
+- 规则文本只保留执行所需的归纳结论，不粘贴大段原文
+- 若动作会触发后续爆炸、反应、连锁或额外伤害，当前任务只规划“这一轮已可执行的部分”
 
-- `description`: one-line summary of the current action
-- `context`: the full execution context, including facts, rules, relevant uncertainty, and source notes
-- `execution_steps`: ordered step-by-step instructions telling the Executor how to judge, resolve, and apply results
-- `write_targets`: the expected field-level paths to update, such as `Goblin.combat.HP`
-- `actor`: the acting creature if known, using the exact English world-state key root such as `Malik` or `Aldera`
-- `target`: the target if known, using the exact English world-state key root such as `Goblin` or `Aldera`
-- `source`: usually `dm`
-- `dm_notes`: only when the DM needs to provide clarification
-- `task_category`: `normal` unless this is a direct world edit
+## 重要提醒
 
-## Context Conventions
-
-`context` should typically include:
-
-1. What action is being attempted right now
-2. Confirmed state from KV
-3. Relevant rules from RAG
-4. Which part is already a fact and can be executed now
-5. Which part is still uncertain, marked with `[Needs Confirmation]` when needed
-6. The concrete execution order and the fields that should be written back
-
-For any state the Executor may need to modify, `context` must include the exact writable world-state key and current value.
-KV facts should be kept as raw values from memory, while RAG should be rewritten as concise rule conclusions for execution.
-
-Good examples:
-- `[KV Malik.spell_slots] 1环: 4/4`
-- `[KV Aldera.combat] HP: 44/44 | AC: 18 | 反应: 可用`
-- `[RAG 魔法飞弹] 归纳: 1环造成 3d4+3 力场伤害，自动命中`
-
-Bad examples:
-- `马利克还有法术位`
-- `艾尔德拉会受伤`
-- `目标状态良好`
-- `[RAG 魔法飞弹]` 后面直接粘贴一大段检索原文
-
-## Annotation Conventions
-
-- `[Needs Confirmation] [Default: ...]` for missing information, so auto-confirm mode can proceed deterministically
-- Source labels whenever values are known from KV or RAG
-- Prefer raw KV facts and concise RAG summaries over paraphrased KV or copied RAG passages
-
-## Important Notes
-
-- Do not fabricate values
-- Do not return Markdown scripts
-- Do not assume later rounds for the Planner
-- The final task should represent exactly one executable planning unit
+- 不要编造数值
+- 不要假设后续轮次
+- 不要让 skill 重复核心 planner 已经定义的输出格式

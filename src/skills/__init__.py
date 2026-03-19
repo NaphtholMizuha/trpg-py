@@ -105,16 +105,6 @@ def get_registry() -> SkillRegistry:
     return _skill_registry
 
 
-def detect_intent(user_input: str) -> tuple[str, Optional[Skill]]:
-    """
-    检测用户意图（LLM-based，出错时fallback到关键词匹配）
-
-    这是主要的意图识别入口函数
-    """
-    from .intent_detector import get_intent_detector
-    return get_intent_detector().detect(user_input)
-
-
 def detect_intent_with_keywords(user_input: str) -> tuple[str, Optional[Skill]]:
     """
     使用关键词匹配检测意图（备用方法）
@@ -143,19 +133,10 @@ def detect_intent_with_keywords(user_input: str) -> tuple[str, Optional[Skill]]:
     # 默认combat
     return "standard", combat
 
-
-# 延迟导入并导出 IntentDetector
-def _get_intent_detector():
-    """获取IntentDetector类（延迟导入）"""
-    from .intent_detector import IntentDetector
-    return IntentDetector
-
-
 # 导出
 __all__ = [
     "Skill",
     "SkillRegistry",
     "get_registry",
-    "detect_intent",
     "detect_intent_with_keywords",
 ]

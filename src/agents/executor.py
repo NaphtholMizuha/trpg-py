@@ -1,13 +1,12 @@
 """ExecutorAgent - 单步执行 Agent。"""
 from __future__ import annotations
 
-from pathlib import Path
 import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from ..config import EXECUTOR_SYSTEM_PROMPT
+from ..prompting import load_prompt
 from ..types import ExecutionResult, TaskExecution
 from ..utils.logging import get_logger
 from ..utils.kv_patch import KVPatch
@@ -16,9 +15,8 @@ from .base import BaseAgent
 
 logger = get_logger(__name__)
 
-_PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts"
-TASK_TEMPLATE = (_PROMPT_DIR / "executor_task.md").read_text(encoding="utf-8")
-FORCE_OUTPUT_PROMPT = (_PROMPT_DIR / "force_output" / "executor.txt").read_text(encoding="utf-8")
+EXECUTOR_SYSTEM_PROMPT = load_prompt("executor.md")
+TASK_TEMPLATE = load_prompt("executor_task.md")
 
 
 class ExecutorAgent(BaseAgent):
@@ -47,12 +45,13 @@ class ExecutorAgent(BaseAgent):
         target = (task.target or "").strip()
         context_keys = self._extract_context_keys(task.context)
         write_targets = task.write_targets or []
-
         lines = [
             "精确 world-state key 规则:",
+            "- 信息源优先级固定为：`DM批注 / DM裁定` > `KV` > `RAG`",
             "- `field_changes` 里只能写入上下文中已经出现过的 world-state key，不能翻译、不能改拼写、不能自造别名。",
             "- 不要调用写入工具；你只负责返回 `field_changes`，后续会由 commiter 节点统一写回。",
             "- 如果 `DM批注` 中已有 `[Auto Confirmation] ... -> 视为命中/视为攻击成功/视为失败` 这类裁定，就把它当作既成事实，不要再次为同一件事掷骰。",
+            "- 如果 `KV` 与 `RAG` 冲突，优先相信 `KV` 中的当前状态；`RAG` 只用于补足规则，不用于覆盖当前世界状态。",
             "- 不要用 `evaluate` 读取 KV、解析 `4/4` 这类字符串、或计算 `Malik.spell_slots['1环'] - 1` 这种表达式。",
             "- 只有掷骰等随机结果才调用 `evaluate`；简单整数加减请直接根据上下文给出结果。",
             "- 只接受字段级修改，`path` 必须写成 `Key.Field`，例如 `Aldera.combat.HP`、`Malik.spell_slots.1环`。",
@@ -63,19 +62,11 @@ class ExecutorAgent(BaseAgent):
         if write_targets:
             lines.append(f"- 本轮优先写回这些字段路径: {', '.join(write_targets)}")
         if actor:
-            lines.extend(
-                [
-                    f"- 行动者前缀固定为 `{actor}`",
-                    f"- 行动者常用 key: `{actor}.combat`, `{actor}.spell_slots`, `{actor}.status`, `{actor}.spells`",
-                ]
-            )
+            lines.append(f"- 行动者前缀固定为 `{actor}`")
+            lines.append(f"- 行动者常用 key: `{actor}.combat`, `{actor}.spell_slots`, `{actor}.status`, `{actor}.spells`")
         if target:
-            lines.extend(
-                [
-                    f"- 目标前缀固定为 `{target}`",
-                    f"- 目标常用 key: `{target}.combat`, `{target}.spell_slots`, `{target}.status`, `{target}.spells`",
-                ]
-            )
+            lines.append(f"- 目标前缀固定为 `{target}`")
+            lines.append(f"- 目标常用 key: `{target}.combat`, `{target}.spell_slots`, `{target}.status`, `{target}.spells`")
         lines.append("- 错误示例: `马利克.spell_slots`, `艾尔德拉.combat`, `Eldra.combat`")
         return "\n".join(lines)
 
@@ -104,7 +95,6 @@ class ExecutorAgent(BaseAgent):
                 messages=messages,
                 tools=tools_for_call,
                 response_format=ExecutionResult,
-                force_output_prompt=FORCE_OUTPUT_PROMPT,
             )
         except Exception as exc:
             logger.exception(f"Executor structured output 失败: {exc}")
@@ -138,6 +128,7 @@ class ExecutorAgent(BaseAgent):
     def _sanitize_result(self, result: ExecutionResult, task: TaskExecution) -> ExecutionResult:
         allowed_roots = set(self._extract_context_keys(task.context))
         allowed_targets = set(task.write_targets or [])
+        allowed_additions = self._extract_allowed_additions(task.context)
         sanitized_changes = []
         for change in result.field_changes:
             root_key = self._extract_root_key(change.path)
@@ -148,8 +139,17 @@ class ExecutorAgent(BaseAgent):
             if not self._is_valid_world_state_change(change.path):
                 continue
             current_field_value = self._extract_old_field_value_from_context(task.context, change.path)
+            if not self._is_allowed_field_change(
+                change.path,
+                change.operation,
+                current_field_value,
+                allowed_additions,
+            ):
+                continue
             if not change.old_value:
                 change.old_value = current_field_value
+            if change.operation == Operation.ADD and current_field_value is not None:
+                change.operation = Operation.MOD
             self._normalize_field_change_values(change, current_field_value)
             sanitized_changes.append(change)
         result.field_changes = sanitized_changes
@@ -190,6 +190,42 @@ class ExecutorAgent(BaseAgent):
             return None
         patch = KVPatch(match.group(1).strip())
         return patch.get_field(field)
+
+    def _extract_allowed_additions(self, context: str) -> set[str]:
+        allowed: set[str] = set()
+        if not context:
+            return allowed
+
+        for raw_line in context.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("【可新增字段】"):
+                continue
+            path = line.removeprefix("【可新增字段】").strip()
+            if path:
+                allowed.add(path)
+        return allowed
+
+    def _is_allowed_field_change(
+        self,
+        path: str,
+        operation: Operation,
+        current_field_value: str | None,
+        allowed_additions: set[str],
+    ) -> bool:
+        root_key = self._extract_root_key(path)
+        if not root_key:
+            return False
+
+        if operation in (Operation.MOD, Operation.DEL):
+            return current_field_value is not None
+
+        if operation != Operation.ADD:
+            return False
+
+        if current_field_value is not None:
+            return True
+
+        return path in allowed_additions
 
     def _task_requires_evaluate(self, task: TaskExecution) -> bool:
         text = f"{task.description}\n{task.context}\n{task.dm_notes or ''}"

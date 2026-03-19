@@ -24,6 +24,7 @@ from .exceptions import LLMError, ParseError
 logger = get_logger(__name__)
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
+DEFAULT_FORCE_OUTPUT_PROMPT = "请直接输出最终结果，不要继续调用工具。"
 
 
 def _extract_json_payload(content: Any) -> str | None:
@@ -213,7 +214,7 @@ class BaseAgent(ABC):
                 if force_output_prompt:
                     forced_messages.append(HumanMessage(content=force_output_prompt))
                 return self._invoke_structured_output(forced_messages, response_format)
-            forced_prompt = force_output_prompt or "请直接输出最终结果，不要继续调用工具。"
+            forced_prompt = force_output_prompt or DEFAULT_FORCE_OUTPUT_PROMPT
             try:
                 return cast(AIMessage, self.llm.invoke([*messages, HumanMessage(content=forced_prompt)]))
             except Exception as inner_exc:

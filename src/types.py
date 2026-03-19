@@ -72,7 +72,6 @@ class TaskExecution(BaseModel):
     description: str
     context: str
     action_type: str = "自定义"
-    raw_query_appendix: list[str] = Field(default_factory=list)
     execution_steps: list[str] = Field(default_factory=list)
     write_targets: list[str] = Field(default_factory=list)
     actor: str | None = None
@@ -88,11 +87,11 @@ class TaskExecution(BaseModel):
             return data
 
         normalized = dict(data)
+        normalized.pop("raw_query_appendix", None)
 
         for field_name in (
             "execution_steps",
             "write_targets",
-            "raw_query_appendix",
         ):
             value = normalized.get(field_name)
             if value is None or value == {}:
@@ -316,15 +315,6 @@ class AgentState(TypedDict):
 
 def _build_task_state_snapshot(task: TaskExecution) -> dict[str, str]:
     snapshot: dict[str, str] = {}
-    for item in task.raw_query_appendix:
-        if not isinstance(item, str):
-            continue
-        match = _match_kv_appendix(item)
-        if match is None:
-            continue
-        key, value = match
-        snapshot[key] = value
-
     for raw_line in task.context.splitlines():
         match = _match_context_kv_line(raw_line)
         if match is None:
@@ -333,21 +323,6 @@ def _build_task_state_snapshot(task: TaskExecution) -> dict[str, str]:
         snapshot.setdefault(key, value)
 
     return snapshot
-
-
-def _match_kv_appendix(text: str) -> tuple[str, str] | None:
-    match = text.strip()
-    if not match.startswith("[KV] "):
-        return None
-    payload = match[len("[KV] "):]
-    if ":" not in payload:
-        return None
-    key, value = payload.split(":", 1)
-    key = key.strip()
-    value = value.strip()
-    if not key or not value:
-        return None
-    return key, value
 
 
 def _match_context_kv_line(text: str) -> tuple[str, str] | None:

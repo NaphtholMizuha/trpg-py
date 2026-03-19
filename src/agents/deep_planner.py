@@ -7,24 +7,32 @@ from __future__ import annotations
 
 import re
 import uuid
-from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from ..config import PLANNER_SYSTEM_PROMPT
+from ..prompting import load_prompt
 from ..types import (
     TaskExecution,
 )
 from ..utils.logging import get_logger
 from ..skills import detect_intent_with_keywords, get_registry, Skill
+from ..utils.kv_patch import KVPatch
 from .base import BaseAgent
 
 logger = get_logger(__name__)
 
-_PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts"
-TASK_TEMPLATE = (_PROMPT_DIR / "planner_task.md").read_text(encoding="utf-8")
-FORCE_OUTPUT_PROMPT = (_PROMPT_DIR / "force_output" / "planner.txt").read_text(encoding="utf-8")
+PLANNER_SYSTEM_PROMPT = load_prompt("planner.md")
+TASK_TEMPLATE = load_prompt("planner_task.md")
+PLANNER_FORCE_OUTPUT_PROMPT = """请立即停止继续调用工具，直接输出最终的 TaskExecution JSON。
+
+强制要求：
+- 不要再调用任何工具
+- 不要输出 TOOL_CALL / tool_call / minimax:tool_call / XML / Markdown 代码块
+- 只返回一个可被 TaskExecution 解析的 JSON 对象
+- 如果信息仍不完整，也必须直接收口，并把未决点写成 `[Needs Confirmation] [Default: ...]`
+- 对同一争议点已经做过检索后，不要换措辞重复 search，直接收口
+"""
 
 
 class DeepPlannerAgent(BaseAgent):
@@ -52,7 +60,7 @@ class DeepPlannerAgent(BaseAgent):
         tools: list[BaseTool] | None = None,
         skills: list[Skill] | None = None,
     ):
-        super().__init__(model, api_key, base_url, tools, max_iterations=4)
+        super().__init__(model, api_key, base_url, tools, max_iterations=10)
         self.skills = skills or []
         self._logger = get_logger(f"{self.__class__.__module__}.{self.__class__.__name__}")
 
@@ -64,13 +72,29 @@ class DeepPlannerAgent(BaseAgent):
         if not selected_skills:
             return base_prompt
 
-        skills_content = "\n\n" + "=" * 50 + "\n\n".join(
-            [f"## Skill: {s.name}\n{s.content}" for s in selected_skills]
-        )
-        return f"{base_prompt}\n\n## 可用的 Skills\n{skills_content}"
+        return f"{base_prompt}\n\n{self._render_domain_modules(selected_skills)}"
+
+    def _render_domain_modules(self, skills: list[Skill]) -> str:
+        sections = [
+            "## 领域 Skills",
+            "下面这些内容只提供领域差异。",
+            "不要重复它们与核心 planner 合同无关的通用 schema 规则。",
+        ]
+        for skill in skills:
+            sections.extend(
+                [
+                    "",
+                    f"## Domain Skill: {skill.name}",
+                    skill.content.strip(),
+                ]
+            )
+        return "\n".join(sections).strip()
 
     def plan(self, user_input: str) -> list[TaskExecution]:
         self._logger.info("DeepPlannerAgent 分析指令", user_input=user_input)
+        search_tool = self.tools.get("search")
+        if search_tool is not None and hasattr(search_tool, "reset_session"):
+            search_tool.reset_session()
         intent_type, selected_skill = detect_intent_with_keywords(user_input)
         selected_skills = [selected_skill] if selected_skill is not None else self.skills
 
@@ -82,7 +106,7 @@ class DeepPlannerAgent(BaseAgent):
             task = self._invoke_agent(
                 messages=messages,
                 response_format=TaskExecution,
-                force_output_prompt=FORCE_OUTPUT_PROMPT,
+                force_output_prompt=PLANNER_FORCE_OUTPUT_PROMPT,
             )
             return [self._normalize_task(self._ensure_task_id(task))]
         except Exception as exc:
@@ -95,6 +119,7 @@ class DeepPlannerAgent(BaseAgent):
         return task
 
     def _normalize_task(self, task: TaskExecution) -> TaskExecution:
+        task.context = self._hydrate_context_kv_lines(task.context)
         kv_roots = self._extract_kv_roots(task.context)
 
         if task.actor and self._contains_cjk(task.actor):
@@ -110,9 +135,73 @@ class DeepPlannerAgent(BaseAgent):
         task.write_targets = self._normalize_write_targets(task)
         return task
 
+    def _hydrate_context_kv_lines(self, context: str) -> str:
+        if not context:
+            return context
+
+        kv_keys = self._extract_context_keys(context)
+        if not kv_keys:
+            return context
+
+        snapshot = self._load_kv_snapshot(kv_keys)
+        if not snapshot:
+            return context
+
+        hydrated_lines: list[str] = []
+        for raw_line in context.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            hydrated_lines.append(self._hydrate_context_line(line, snapshot))
+        return "\n".join(hydrated_lines).strip()
+
+    def _load_kv_snapshot(self, keys: list[str]) -> dict[str, str]:
+        tools = getattr(self, "tools", {}) or {}
+        read_tool = tools.get("read")
+        if read_tool is None:
+            return {}
+
+        store = getattr(read_tool, "store", None)
+        if store is None:
+            return {}
+
+        get_multi = getattr(store, "get_multi", None)
+        if callable(get_multi):
+            return {
+                key: value
+                for key, value in get_multi(keys).items()
+                if isinstance(value, str) and value
+            }
+
+        get_single = getattr(store, "get", None)
+        if not callable(get_single):
+            return {}
+
+        snapshot: dict[str, str] = {}
+        for key in keys:
+            value = get_single(key)
+            if isinstance(value, str) and value:
+                snapshot[key] = value
+        return snapshot
+
+    def _hydrate_context_line(self, line: str, snapshot: dict[str, str]) -> str:
+        match = re.match(
+            r"^(?P<prefix>.*?\[KV\s+(?P<key>[A-Za-z][A-Za-z0-9_.]*)\])(?:\s+.*)?$",
+            line,
+        )
+        if match is None:
+            return line
+
+        key = match.group("key")
+        value = snapshot.get(key)
+        if not value:
+            return line
+        return f"{match.group('prefix')} {value}"
+
     def _normalize_write_targets(self, task: TaskExecution) -> list[str]:
         context_keys = self._extract_context_keys(task.context)
         context_key_set = set(context_keys)
+        allowed_additions = self._extract_allowed_additions(task.context)
         normalized_targets: list[str] = []
         seen: set[str] = set()
 
@@ -122,6 +211,11 @@ class DeepPlannerAgent(BaseAgent):
                 continue
 
             if self._is_field_level_path(path):
+                root_key = self._extract_root_key(path)
+                if root_key not in context_key_set:
+                    continue
+                if self._extract_old_field_value_from_context(task.context, path) is None and path not in allowed_additions:
+                    continue
                 self._append_unique(normalized_targets, seen, path)
                 continue
 
@@ -134,6 +228,41 @@ class DeepPlannerAgent(BaseAgent):
 
         return normalized_targets
 
+    def _extract_allowed_additions(self, context: str) -> set[str]:
+        allowed: set[str] = set()
+        if not context:
+            return allowed
+
+        for raw_line in context.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("【可新增字段】"):
+                continue
+            path = line.removeprefix("【可新增字段】").strip()
+            if path:
+                allowed.add(path)
+        return allowed
+
+    def _extract_old_field_value_from_context(self, context: str, path: str) -> str | None:
+        root_key = self._extract_root_key(path)
+        if not context or not root_key:
+            return None
+
+        field = path.split(".")[-1]
+        match = re.search(rf"\[KV {re.escape(root_key)}\]\s*([^\n]+)", context)
+        if not match:
+            return None
+
+        patch = KVPatch(match.group(1).strip())
+        return patch.get_field(field)
+
+    def _extract_root_key(self, path: str) -> str | None:
+        if not path:
+            return None
+        parts = path.split(".")
+        if len(parts) < 3:
+            return None
+        return ".".join(parts[:2])
+
     def _infer_fields_for_root(self, task: TaskExecution, root_key: str) -> list[str]:
         available_fields = self._extract_kv_fields(task.context, root_key)
         if not available_fields:
@@ -143,7 +272,6 @@ class DeepPlannerAgent(BaseAgent):
             task.description,
             task.context,
             *task.execution_steps,
-            *task.raw_query_appendix,
         ]
 
         if root_key.endswith(".spell_slots"):

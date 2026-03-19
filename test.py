@@ -328,7 +328,7 @@ def main(
     elif provider == "lingya":
         config = replace(
             config,
-            llm_model="gpt-4.1-mini",
+            llm_model="gpt-4o-mini",
             llm_api_key=os.getenv("LINGYA_API_KEY"),
             llm_base_url="https://api.lingyaai.cn/v1",
         )
@@ -363,7 +363,7 @@ def main(
 
     scenario = Scenario(
         name="magic_missile_shield_counterspell",
-        user_input="马利克对艾尔德拉施放魔法飞弹",
+        user_input="艾尔德拉用圣火术点燃炸药桶，结算伤害",
 )
 
     run_scenario(workflow, store, scenario, "scene_magic_missile_shield_counterspell")

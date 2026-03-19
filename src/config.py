@@ -4,21 +4,8 @@
 集中管理所有配置项，支持从环境变量加载
 """
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 import os
-
-
-def _load_prompt(filename: str) -> str:
-    """从 prompts 目录加载 prompt 文件"""
-    prompt_path = Path(__file__).parent.parent / "prompts" / filename
-    return prompt_path.read_text(encoding="utf-8")
-
-
-# Agent System Prompts - 从文件加载
-EXECUTOR_SYSTEM_PROMPT = _load_prompt("executor.md")
-PLANNER_SYSTEM_PROMPT = _load_prompt("planner.md")
-RESOLVER_SYSTEM_PROMPT = _load_prompt("resolver.md")
 
 
 @dataclass(frozen=True)

@@ -49,6 +49,16 @@ def _extract_pending_confirmations(text: str | None) -> list[dict[str, str]]:
     return confirmations
 
 
+def _extract_confirmation_lines(text: str | None) -> list[str]:
+    if not text:
+        return []
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if "[Needs Confirmation]" in line
+    ]
+
+
 def _apply_auto_confirm_defaults(task: TaskExecution) -> None:
     confirmations = _extract_pending_confirmations(task.context)
     if not confirmations:
@@ -57,6 +67,44 @@ def _apply_auto_confirm_defaults(task: TaskExecution) -> None:
     for item in confirmations:
         lines.append(f"[Auto Confirmation] {item['question']} -> {item['default']}")
     task.dm_notes = "\n".join(line for line in lines if line).strip()
+
+
+def _apply_modify_suggestion(task: TaskExecution, suggestion: str | None) -> None:
+    suggestion_text = (suggestion or "").strip()
+    if not suggestion_text:
+        return
+
+    dm_override = f"[DM Override] {suggestion_text}"
+    notes = [task.dm_notes.strip()] if task.dm_notes else []
+    if dm_override not in notes:
+        notes.append(dm_override)
+    task.dm_notes = "\n".join(line for line in notes if line).strip()
+
+    override_context = (
+        f"【DM裁定】{suggestion_text}。此裁定优先于上文默认规则、待确认项和执行步骤中的冲突内容。"
+    )
+    context_lines = task.context.splitlines() if task.context else []
+    if override_context not in context_lines:
+        context_lines.append(override_context)
+    task.context = "\n".join(line for line in context_lines if line).strip()
+
+    # DM 已回答待确认项后，当前任务上下文应视为完整，不再保留旧的待确认占位。
+    resolved_lines = [
+        line for line in task.context.splitlines()
+        if "[Needs Confirmation]" not in line
+    ]
+    if override_context not in resolved_lines:
+        resolved_lines.append(override_context)
+    task.context = "\n".join(line for line in resolved_lines if line).strip()
+
+    override_step = f"优先采用DM裁定：{suggestion_text}；若与其他步骤冲突，以此裁定为准。"
+    execution_steps = [
+        step for step in (task.execution_steps or [])
+        if "[Needs Confirmation]" not in step and "确认采用默认裁定" not in step
+    ]
+    if override_step not in execution_steps:
+        execution_steps.insert(0, override_step)
+    task.execution_steps = execution_steps
 
 
 def _enqueue_task(state: AgentState, task: TaskExecution) -> None:
@@ -94,26 +142,7 @@ def _extract_window_shared_context(context: str) -> list[str]:
 
 
 def _extract_task_shared_context(task: TaskExecution) -> list[str]:
-    lines = _extract_window_shared_context(task.context)
-    seen = set(lines)
-
-    for item in task.raw_query_appendix:
-        line = (item or "").strip()
-        if not line:
-            continue
-        if not (
-            line.startswith("[KV]")
-            or line.startswith("[RAG]")
-            or "[规则" in line
-            or "[Rule" in line
-        ):
-            continue
-        if line in seen:
-            continue
-        seen.add(line)
-        lines.append(line)
-
-    return lines
+    return _extract_window_shared_context(task.context)
 
 
 def _merge_window_shared_context(window: ResolutionWindow, task: TaskExecution) -> None:
@@ -234,6 +263,35 @@ def _materialize_resolution(window: ResolutionWindow) -> ResolutionResult:
     )
 
 
+def _materialize_single_run_resolution(window: ResolutionWindow) -> ResolutionResult:
+    """单 run 窗口直接收敛，无需调用 resolver agent。"""
+    if len(window.runs) != 1:
+        return _materialize_resolution(window)
+
+    run = window.runs[0]
+    resolver_source = f"resolver:{window.window_id}"
+    final_changes = [
+        StateChange(
+            path=change.path,
+            old_value=change.old_value,
+            new_value=change.new_value,
+            operation=change.operation,
+            source=resolver_source,
+        )
+        for change in run.field_changes
+    ]
+
+    return ResolutionResult(
+        window_id=window.window_id,
+        final_field_changes=final_changes,
+        discarded_field_changes=[],
+        resolution_summary=(
+            f"本结算窗口仅包含 1 个 run，直接采用该 run 的 {len(final_changes)} 个字段变更，无需进入 resolver 合并。"
+        ),
+        dm_suggestions=[],
+    )
+
+
 def create_planner_node(planner_agent):
     """创建规划节点。"""
 
@@ -294,7 +352,16 @@ def create_task_approval_node():
         print(f"类型: {task.task_category}")
         if task.context:
             print(f"\n上下文预览 (前500字符):\n  {task.context[:500]}...")
+        if task.execution_steps:
+            print("\n完整 execution_steps:")
+            for idx, step in enumerate(task.execution_steps, start=1):
+                print(f"  {idx}. {step}")
         confirmations = _extract_pending_confirmations(task.context)
+        confirmation_lines = _extract_confirmation_lines(task.context)
+        if confirmation_lines:
+            print("\n待确认原文:")
+            for line in confirmation_lines:
+                print(f"  {line}")
         if confirmations:
             print("\n待确认默认项:")
             for item in confirmations:
@@ -325,7 +392,10 @@ def create_task_approval_node():
             state["_current_task"] = None
             return Command(goto="planner", update=state)
         if action == "modify":
-            task.dm_notes = result.get("suggestion", "")
+            suggestion = str(result.get("suggestion", "")).strip()
+            if suggestion:
+                _apply_modify_suggestion(task, suggestion)
+                return Command(goto="task_approval", update=state)
         return Command(goto="executor", update=state)
 
     return task_approval_node
@@ -436,7 +506,11 @@ def create_resolver_node(resolver_agent):
         print("\n🧩 Resolver: 开始合并当前窗口")
         print(json.dumps(active_window.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
-        resolution = resolver_agent.resolve(active_window)
+        if len(active_window.runs) == 1:
+            resolution = _materialize_single_run_resolution(active_window)
+            print("   单 run 窗口，跳过 resolver agent，直接采用当前 run 结果。")
+        else:
+            resolution = resolver_agent.resolve(active_window)
         state["pending_resolution"] = resolution
         active_window.status = WindowStatus.RESOLVED
 

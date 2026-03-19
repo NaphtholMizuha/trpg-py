@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from ..config import RESOLVER_SYSTEM_PROMPT
+from ..prompting import load_prompt
 from ..types import (
     DiscardedStateChange,
     ResolutionResult,
@@ -19,9 +18,8 @@ from .base import BaseAgent
 
 logger = get_logger(__name__)
 
-_PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts"
-TASK_TEMPLATE = (_PROMPT_DIR / "resolver_task.md").read_text(encoding="utf-8")
-FORCE_OUTPUT_PROMPT = (_PROMPT_DIR / "force_output" / "resolver.txt").read_text(encoding="utf-8")
+RESOLVER_SYSTEM_PROMPT = load_prompt("resolver.md")
+TASK_TEMPLATE = load_prompt("resolver_task.md")
 
 
 class ResolverAgent(BaseAgent):
@@ -51,6 +49,9 @@ class ResolverAgent(BaseAgent):
             window_id=window.window_id,
             runs=len(window.runs),
         )
+        search_tool = self.tools.get("search")
+        if search_tool is not None and hasattr(search_tool, "reset_session"):
+            search_tool.reset_session()
 
         task_prompt = TASK_TEMPLATE.format(
             window_id=window.window_id,
@@ -71,7 +72,6 @@ class ResolverAgent(BaseAgent):
             result = self._invoke_agent(
                 messages=messages,
                 response_format=ResolutionResult,
-                force_output_prompt=FORCE_OUTPUT_PROMPT,
             )
         except Exception as exc:
             logger.exception(f"Resolver structured output 失败: {exc}")

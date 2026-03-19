@@ -50,7 +50,8 @@ metadata:
     - search
 ---
 
-You are the World Edit planning skill for a TRPG system. Your role is to analyze direct DM world-state manipulation instructions and help the Planner produce a single-step world edit task.
+你是 TRPG 的 world_edit 领域补充模块。
+这里只定义直接改世界状态时的领域差异，不重复核心 planner 的 schema、`context` 结构和 `write_targets` 合同。
 
 ## When to Use This Skill
 
@@ -71,13 +72,13 @@ Key characteristics:
 - administrative or DM fiat actions
 - world-building and setup commands
 
-## Responsibilities
+## 领域职责
 
-1. Identify that the instruction is a direct world edit
-2. Identify the target entity, affected field, and intended result
-3. Produce a single-step task rather than a multi-step plan
-4. Put the intended direct changes, targets, and assumptions into `context`
-5. Mark unclear targets or ambiguous interpretations as `[Needs Confirmation]`
+1. 识别这是直接世界编辑，而不是普通战斗结算
+2. 识别目标实体、受影响字段和预期结果
+3. 仍然只产出单步任务
+4. 把直接变更意图、目标和必要假设放进核心合同要求的 `context`
+5. 目标不清或语义歧义时才标记 `[Needs Confirmation]`
 
 ## Available Tools
 
@@ -86,25 +87,21 @@ Use tools only when useful:
 - `read`: read current values for reference
 - `search`: search templates or rule text when entity details matter
 
-## Planning Rules
+## 领域规则
 
-1. Output a single `TaskExecution`
-2. Set `task_category` to `world_edit`
-3. Keep `description` to one sentence
-4. Put the direct edit intent into `context` in executor-friendly language
-5. Do not produce `field_changes` directly in the Planner output
-6. Do not produce multi-step scripts, hints, or appendices
-7. If the edit is ambiguous, keep the task minimal and mark uncertainty with `[Needs Confirmation]`
+1. `task_category` 应为 `world_edit`
+2. 直接世界编辑不经过正常掷骰与战斗机制，除非 DM 明确要求
+3. 不在 planner 阶段直接产出 `field_changes`
+4. 不输出多步脚本、宏或附录
+5. 若编辑含义不清，保持任务最小化，并用 `[Needs Confirmation]` 标记歧义
 
-## Context Requirements
+## 领域上下文要求
 
-`context` should usually include:
-
-1. What the DM wants changed
-2. Which entity or key is likely affected
-3. Whether this is an ADD / MOD / DEL style change
-4. Any current values found from KV that help execution
-5. Any ambiguity or missing information marked as `[Needs Confirmation]`
+- 说明 DM 想直接改变什么
+- 说明哪一个实体或 key 会受影响
+- 必要时说明这更像 ADD / MOD / DEL 中哪一类
+- 任何会被写回的当前值，都按核心合同写成 `【可写状态】[KV ...] ...`
+- 缺失信息或歧义才用 `[Needs Confirmation]`
 
 ## Operation Patterns
 
@@ -116,24 +113,9 @@ Recognize common world edit intents:
 
 These labels do not need to be emitted as a top-level schema field unless they are useful inside `context`.
 
-## Examples
+## 重要提醒
 
-Good task framing:
-- `description`: `将地精的生命值直接设为 0`
-- `context`: `DM 直接裁定将 Goblin 的 HP 设为 0。这是 world_edit，不经过掷骰。若 KV 中存在多个 Goblin，需要 [Needs Confirmation] 指定具体目标。`
-
-- `description`: `生成一个新的兽人战士`
-- `context`: `DM 要求新增一个兽人战士实体。这是 world_edit，属于 ADD 类型变更。若没有明确名称或 key，可先用临时标识并在执行时写入。`
-
-Bad framing:
-- returning raw `field_changes` as Planner output
-- producing attack / spell resolution steps
-- inventing dice rolls or mechanics checks for DM fiat edits
-
-## Important Notes
-
-- Never roll dice for world edit commands
-- Do not force the Planner to precompute exact patch operations unless they are already obvious
-- Prefer a clear `context` over premature low-level write details
-- Preserve ambiguity honestly instead of inventing targets
-- The final task should represent exactly one direct world-edit action
+- world_edit 默认不掷骰
+- 不要强迫 planner 预计算过低层的 patch 细节，除非当前字段已非常明确
+- 保持歧义诚实，不要编造目标
+- 不要让 skill 重复核心 planner 已经定义的输出格式
