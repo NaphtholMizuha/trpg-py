@@ -26,7 +26,16 @@ logger = get_logger(__name__)
 
 class SearchInput(BaseModel):
     """RAG 检索工具输入"""
-    query: str = Field(description="搜索查询文本")
+    query: str = Field(
+        description=(
+            "用于检索规则的自然语言查询。"
+            "优先用 1 到 3 句话完整描述当前规则问题，包括动作/法术/状态名称、参与对象、触发条件、"
+            "想确认的判定或结论。"
+            "保留关键术语、数值阈值和专有名词，但不要只写关键词堆砌。"
+            "推荐示例: “5e 中，角色在近战范围内对远处目标进行远程法术攻击时，是否因敌人在 5 尺内而劣势？"
+            "如果施放的是 fire bolt，需要看哪条规则？”"
+        )
+    )
     limit: int = Field(default=2, description="返回结果数量")
 
 
@@ -74,7 +83,12 @@ class WriteFieldsInput(BaseModel):
 class SearchTool(BaseTool):
     """RAG 检索工具 - 搜索 D&D 5e SRD 规则文档"""
     name: str = "search"
-    description: str = "搜索 D&D 5e SRD 规则文档，返回相关规则说明"
+    description: str = (
+        "搜索 D&D 5e SRD 规则文档，返回相关规则说明。"
+        "这个检索器支持语义检索与关键词混合召回，因此 query 应优先写成完整的规则问题或场景描述，"
+        "说明当前动作、实体、条件和想确认的结论，而不是只提交几个关键词。"
+        "如果一个问题包含多个独立规则点，优先拆成多次更聚焦的查询。"
+    )
     args_schema: type[BaseModel] = SearchInput
 
     retriever: Retriever = Field(exclude=True)

@@ -69,7 +69,7 @@ class DeepPlannerAgent(BaseAgent):
         )
         return f"{base_prompt}\n\n## 可用的 Skills\n{skills_content}"
 
-    def plan(self, user_input: str) -> list[TaskExecution]:
+    def plan(self, user_input: str) -> TaskExecution:
         self._logger.info("DeepPlannerAgent 分析指令", user_input=user_input)
         intent_type, selected_skill = detect_intent_with_keywords(user_input)
         selected_skills = [selected_skill] if selected_skill is not None else self.skills
@@ -84,10 +84,10 @@ class DeepPlannerAgent(BaseAgent):
                 response_format=TaskExecution,
                 force_output_prompt=FORCE_OUTPUT_PROMPT,
             )
-            return [self._normalize_task(self._ensure_task_id(task))]
+            return self._normalize_task(self._ensure_task_id(task))
         except Exception as exc:
             self._logger.exception(f"Planner structured output 失败，已回退: {exc}")
-            return [self._build_fallback_task(user_input, intent_type=intent_type)]
+            return self._build_fallback_task(user_input, intent_type=intent_type)
 
     def _ensure_task_id(self, task: TaskExecution) -> TaskExecution:
         if not task.task_id:
@@ -172,7 +172,9 @@ class DeepPlannerAgent(BaseAgent):
             return []
         seen: set[str] = set()
         ordered: list[str] = []
-        for key in re.findall(r"\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]", text):
+        matches = re.findall(r"\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]", text)
+        matches.extend(re.findall(r"\[KV\]\s*([A-Za-z][A-Za-z0-9_.]*)\s*:", text))
+        for key in matches:
             if key not in seen:
                 seen.add(key)
                 ordered.append(key)
@@ -183,6 +185,8 @@ class DeepPlannerAgent(BaseAgent):
             return []
 
         match = re.search(rf"\[KV {re.escape(root_key)}\]\s*([^\n]+)", context)
+        if not match:
+            match = re.search(rf"\[KV\]\s*{re.escape(root_key)}\s*:\s*([^\n]+)", context)
         if not match:
             return []
 
@@ -265,6 +269,7 @@ class DeepPlannerAgent(BaseAgent):
         if not text:
             return []
         roots = re.findall(r"\[KV\s+([A-Za-z][A-Za-z0-9_]*)\.[^\]]+\]", text)
+        roots.extend(re.findall(r"\[KV\]\s*([A-Za-z][A-Za-z0-9_]*)\.[A-Za-z0-9_.]+\s*:", text))
         seen: set[str] = set()
         ordered: list[str] = []
         for root in roots:

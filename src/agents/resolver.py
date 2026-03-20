@@ -107,24 +107,34 @@ class ResolverAgent(BaseAgent):
         allowed_paths = self._collect_allowed_paths(window)
         resolver_source = f"resolver:{window.window_id}"
 
-        sanitized_final: list[StateChange] = []
-        for change in result.final_field_changes:
-            if allowed_paths and change.path not in allowed_paths:
-                continue
-            change.source = resolver_source
-            sanitized_final.append(change)
-        result.final_field_changes = sanitized_final
+        result.final_resource_costs = self._sanitize_final_bucket(result.final_resource_costs, allowed_paths, resolver_source)
+        result.final_primary_effects = self._sanitize_final_bucket(result.final_primary_effects, allowed_paths, resolver_source)
+        result.final_contingent_effects = self._sanitize_final_bucket(result.final_contingent_effects, allowed_paths, resolver_source)
+        if not any((result.final_resource_costs, result.final_primary_effects, result.final_contingent_effects)) and result.final_field_changes:
+            result.final_primary_effects = self._sanitize_final_bucket(result.final_field_changes, allowed_paths, resolver_source)
 
-        sanitized_discarded: list[DiscardedStateChange] = []
-        for change in result.discarded_field_changes:
-            if allowed_paths and change.path not in allowed_paths:
-                continue
-            if not change.discarded_by:
-                change.discarded_by = resolver_source
-            if not change.reason:
-                change.reason = "被 resolver 判定为在当前结算窗口内不生效。"
-            sanitized_discarded.append(change)
-        result.discarded_field_changes = sanitized_discarded
+        result.discarded_resource_costs = self._sanitize_discarded_bucket(result.discarded_resource_costs, allowed_paths, resolver_source)
+        result.discarded_primary_effects = self._sanitize_discarded_bucket(result.discarded_primary_effects, allowed_paths, resolver_source)
+        result.discarded_contingent_effects = self._sanitize_discarded_bucket(result.discarded_contingent_effects, allowed_paths, resolver_source)
+        if not any(
+            (
+                result.discarded_resource_costs,
+                result.discarded_primary_effects,
+                result.discarded_contingent_effects,
+            )
+        ) and result.discarded_field_changes:
+            result.discarded_primary_effects = self._sanitize_discarded_bucket(result.discarded_field_changes, allowed_paths, resolver_source)
+
+        result.final_field_changes = [
+            *result.final_resource_costs,
+            *result.final_primary_effects,
+            *result.final_contingent_effects,
+        ]
+        result.discarded_field_changes = [
+            *result.discarded_resource_costs,
+            *result.discarded_primary_effects,
+            *result.discarded_contingent_effects,
+        ]
 
         if not result.resolution_summary:
             result.resolution_summary = "resolver 完成了当前结算窗口的合并裁决。"
@@ -132,10 +142,47 @@ class ResolverAgent(BaseAgent):
         result.dm_suggestions = [item for item in (result.dm_suggestions or []) if item]
         return result
 
+    def _sanitize_final_bucket(
+        self,
+        changes: list[StateChange],
+        allowed_paths: set[str],
+        resolver_source: str,
+    ) -> list[StateChange]:
+        sanitized: list[StateChange] = []
+        for change in changes:
+            if allowed_paths and change.path not in allowed_paths:
+                continue
+            change.source = resolver_source
+            sanitized.append(change)
+        return sanitized
+
+    def _sanitize_discarded_bucket(
+        self,
+        changes: list[DiscardedStateChange],
+        allowed_paths: set[str],
+        resolver_source: str,
+    ) -> list[DiscardedStateChange]:
+        sanitized: list[DiscardedStateChange] = []
+        for change in changes:
+            if allowed_paths and change.path not in allowed_paths:
+                continue
+            if not change.discarded_by:
+                change.discarded_by = resolver_source
+            if not change.reason:
+                change.reason = "被 resolver 判定为在当前结算窗口内不生效。"
+            sanitized.append(change)
+        return sanitized
+
     def _is_actionable_result(self, result: ResolutionResult) -> bool:
         return any(
             (
+                result.final_resource_costs,
+                result.final_primary_effects,
+                result.final_contingent_effects,
                 result.final_field_changes,
+                result.discarded_resource_costs,
+                result.discarded_primary_effects,
+                result.discarded_contingent_effects,
                 result.discarded_field_changes,
                 (result.resolution_summary or "").strip(),
                 result.dm_suggestions,
@@ -145,15 +192,19 @@ class ResolverAgent(BaseAgent):
     def _build_fallback_result(self, window: ResolutionWindow) -> ResolutionResult:
         """保底 resolver：按 priority/order 排序后，对同 path 采用后者覆盖。"""
         sorted_runs = sorted(window.runs, key=lambda run: (run.priority, run.order))
-        final_by_path: dict[str, StateChange] = {}
-        discarded: list[DiscardedStateChange] = []
         resolver_source = f"resolver:{window.window_id}"
+        final_resource_by_path: dict[str, StateChange] = {}
+        final_primary_by_path: dict[str, StateChange] = {}
+        final_contingent_by_path: dict[str, StateChange] = {}
+        discarded_resource_costs: list[DiscardedStateChange] = []
+        discarded_primary_effects: list[DiscardedStateChange] = []
+        discarded_contingent_effects: list[DiscardedStateChange] = []
 
         for run in sorted_runs:
-            for change in run.field_changes:
-                previous = final_by_path.get(change.path)
+            for change in run.resource_costs:
+                previous = final_resource_by_path.get(change.path)
                 if previous is not None:
-                    discarded.append(
+                    discarded_resource_costs.append(
                         DiscardedStateChange(
                             path=previous.path,
                             old_value=previous.old_value,
@@ -164,7 +215,49 @@ class ResolverAgent(BaseAgent):
                             reason="同一路径字段变更被同窗口内更晚处理的结果覆盖。",
                         )
                     )
-                final_by_path[change.path] = StateChange(
+                final_resource_by_path[change.path] = StateChange(
+                    path=change.path,
+                    old_value=change.old_value,
+                    new_value=change.new_value,
+                    operation=change.operation,
+                    source=resolver_source,
+                )
+            for change in run.primary_effects:
+                previous = final_primary_by_path.get(change.path)
+                if previous is not None:
+                    discarded_primary_effects.append(
+                        DiscardedStateChange(
+                            path=previous.path,
+                            old_value=previous.old_value,
+                            new_value=previous.new_value,
+                            operation=previous.operation,
+                            source=previous.source,
+                            discarded_by=resolver_source,
+                            reason="同一路径字段变更被同窗口内更晚处理的结果覆盖。",
+                        )
+                    )
+                final_primary_by_path[change.path] = StateChange(
+                    path=change.path,
+                    old_value=change.old_value,
+                    new_value=change.new_value,
+                    operation=change.operation,
+                    source=resolver_source,
+                )
+            for change in run.contingent_effects:
+                previous = final_contingent_by_path.get(change.path)
+                if previous is not None:
+                    discarded_contingent_effects.append(
+                        DiscardedStateChange(
+                            path=previous.path,
+                            old_value=previous.old_value,
+                            new_value=previous.new_value,
+                            operation=previous.operation,
+                            source=previous.source,
+                            discarded_by=resolver_source,
+                            reason="同一路径字段变更被同窗口内更晚处理的结果覆盖。",
+                        )
+                    )
+                final_contingent_by_path[change.path] = StateChange(
                     path=change.path,
                     old_value=change.old_value,
                     new_value=change.new_value,
@@ -174,11 +267,15 @@ class ResolverAgent(BaseAgent):
 
         return ResolutionResult(
             window_id=window.window_id,
-            final_field_changes=list(final_by_path.values()),
-            discarded_field_changes=discarded,
+            final_resource_costs=list(final_resource_by_path.values()),
+            final_primary_effects=list(final_primary_by_path.values()),
+            final_contingent_effects=list(final_contingent_by_path.values()),
+            discarded_resource_costs=discarded_resource_costs,
+            discarded_primary_effects=discarded_primary_effects,
+            discarded_contingent_effects=discarded_contingent_effects,
             resolution_summary=(
                 f"resolver fallback 收到 {len(window.runs)} 个 run，"
-                f"产出 {len(final_by_path)} 个最终字段变更。"
+                f"产出 {len(final_resource_by_path) + len(final_primary_by_path) + len(final_contingent_by_path)} 个最终字段变更。"
             ),
             dm_suggestions=["若本窗口结算后引发新的规则问题，请由 DM 决定是否开启下一窗口。"],
         )

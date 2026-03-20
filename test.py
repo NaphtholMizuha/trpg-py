@@ -267,13 +267,8 @@ def run_scenario(workflow, store, scenario: Scenario, thread_id: str):
                         )
                         continue
 
-            # 打印队列状态
-            queue = output.get("task_queue", [])
-            if queue and len(queue) > 0:
-                console.print(f"\n[dim]任务队列[/dim]: {len(queue)} 个待处理")
-
             # 检查是否结束（没有更多任务）
-            if not current_task and not queue:
+            if not current_task:
                 console.print("\n[bold green]场景执行完成[/bold green]")
                 break
 

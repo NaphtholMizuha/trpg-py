@@ -4,6 +4,10 @@ DM指令: {user_input}
 
 约束：
 - 使用工具查询需要的信息（`fetch_keys` / `read` / `search`）
+- 调用 `search` 时，query 优先写成完整自然语言规则问题，不要只列关键词
+- `search` query 应尽量包含：当前动作/法术/特性、参与对象、触发条件、想确认的规则结论
+- 保留关键术语、状态名、距离、次数、数值阈值等精确信息，但不要把 query 写成标签拼接
+- 如果问题里混有多个独立规则点，拆成多次更聚焦的 `search`，不要在一次 query 里并列塞太多主题
 - 输出必须保持 JSON 结构化，并映射为下面这些字段：
   - `task_id`
   - `description`
@@ -57,5 +61,10 @@ DM指令: {user_input}
 - `[KV] Aldera.combat: HP: 44/44 | AC: 18 ...`
 - `[KV] Goblin.combat: HP: 10/10 | AC: 15 ...`
 - `[RAG] 攻击规则: 进行攻击检定，命中后掷伤害`
+
+`search` query 推荐写法示例：
+- `施放 magic missile 时是否自动命中？如果目标有 shield，是否会使这次 magic missile 失效？`
+- `5e 中，生物离开威胁范围时会触发借机攻击；如果目标使用 disengage，还会不会触发？`
+- `角色在 5 尺内有敌人时进行远程攻击是否劣势？这个规则是否同样适用于远程法术攻击？`
 
 请开始分析。

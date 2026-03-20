@@ -50,8 +50,8 @@ class ExecutorAgent(BaseAgent):
 
         lines = [
             "精确 world-state key 规则:",
-            "- `field_changes` 里只能写入上下文中已经出现过的 world-state key，不能翻译、不能改拼写、不能自造别名。",
-            "- 不要调用写入工具；你只负责返回 `field_changes`，后续会由 commiter 节点统一写回。",
+            "- `resource_costs` / `primary_effects` / `contingent_effects` 里只能写入上下文中已经出现过的 world-state key，不能翻译、不能改拼写、不能自造别名。",
+            "- 不要调用写入工具；你只负责返回结构化变更，后续会由 commiter 节点统一写回。",
             "- 如果 `DM批注` 中已有 `[Auto Confirmation] ... -> 视为命中/视为攻击成功/视为失败` 这类裁定，就把它当作既成事实，不要再次为同一件事掷骰。",
             "- 不要用 `evaluate` 读取 KV、解析 `4/4` 这类字符串、或计算 `Malik.spell_slots['1环'] - 1` 这种表达式。",
             "- 只有掷骰等随机结果才调用 `evaluate`；简单整数加减请直接根据上下文给出结果。",
@@ -111,9 +111,6 @@ class ExecutorAgent(BaseAgent):
             return self._build_fallback_result(task)
 
         result.task_id = task.task_id
-        for change in result.field_changes:
-            change.source = task.task_id
-
         result = self._sanitize_result(result, task)
         result = self._backfill_missing_changes(result, task)
         if not self._is_actionable_result(result):
@@ -133,26 +130,26 @@ class ExecutorAgent(BaseAgent):
 
     def _is_actionable_result(self, result: ExecutionResult) -> bool:
         narration = (result.narration or "").strip()
-        return any((result.field_changes, result.triggered_chains, narration, result.success))
+        return any(
+            (
+                result.resource_costs,
+                result.primary_effects,
+                result.contingent_effects,
+                result.field_changes,
+                result.triggered_chains,
+                narration,
+                result.success,
+            )
+        )
 
     def _sanitize_result(self, result: ExecutionResult, task: TaskExecution) -> ExecutionResult:
         allowed_roots = set(self._extract_context_keys(task.context))
-        allowed_targets = set(task.write_targets or [])
-        sanitized_changes = []
-        for change in result.field_changes:
-            root_key = self._extract_root_key(change.path)
-            if allowed_targets and change.path not in allowed_targets:
-                continue
-            if allowed_roots and (not root_key or root_key not in allowed_roots):
-                continue
-            if not self._is_valid_world_state_change(change.path):
-                continue
-            current_field_value = self._extract_old_field_value_from_context(task.context, change.path)
-            if not change.old_value:
-                change.old_value = current_field_value
-            self._normalize_field_change_values(change, current_field_value)
-            sanitized_changes.append(change)
-        result.field_changes = sanitized_changes
+        result.resource_costs = self._sanitize_change_bucket(result.resource_costs, task.task_id, allowed_roots, task.context)
+        result.primary_effects = self._sanitize_change_bucket(result.primary_effects, task.task_id, allowed_roots, task.context)
+        result.contingent_effects = self._sanitize_change_bucket(result.contingent_effects, task.task_id, allowed_roots, task.context)
+        if not any((result.resource_costs, result.primary_effects, result.contingent_effects)) and result.field_changes:
+            result.primary_effects = self._sanitize_change_bucket(result.field_changes, task.task_id, allowed_roots, task.context)
+        self._sync_result_change_buckets(result)
         result.triggered_chains = [
             chain
             for chain in (result.triggered_chains or [])
@@ -160,12 +157,43 @@ class ExecutorAgent(BaseAgent):
         ]
         return result
 
+    def _sanitize_change_bucket(
+        self,
+        changes: list[StateChange],
+        task_id: str,
+        allowed_roots: set[str],
+        context: str,
+    ) -> list[StateChange]:
+        sanitized_changes: list[StateChange] = []
+        for change in changes:
+            change.source = task_id
+            root_key = self._extract_root_key(change.path)
+            if allowed_roots and (not root_key or root_key not in allowed_roots):
+                continue
+            if not self._is_valid_world_state_change(change.path):
+                continue
+            current_field_value = self._extract_old_field_value_from_context(context, change.path)
+            if not change.old_value:
+                change.old_value = current_field_value
+            self._normalize_field_change_values(change, current_field_value)
+            sanitized_changes.append(change)
+        return sanitized_changes
+
+    def _sync_result_change_buckets(self, result: ExecutionResult) -> None:
+        result.field_changes = [
+            *result.resource_costs,
+            *result.primary_effects,
+            *result.contingent_effects,
+        ]
+
     def _extract_context_keys(self, context: str) -> list[str]:
         if not context:
             return []
         seen: set[str] = set()
         ordered: list[str] = []
-        for key in re.findall(r"\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]", context):
+        matches = re.findall(r"\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]", context)
+        matches.extend(re.findall(r"\[KV\]\s*([A-Za-z][A-Za-z0-9_.]*)\s*:", context))
+        for key in matches:
             if key not in seen:
                 seen.add(key)
                 ordered.append(key)
@@ -186,6 +214,8 @@ class ExecutorAgent(BaseAgent):
         field = path.split(".")[-1]
         pattern = rf"\[KV {re.escape(root_key)}\]\s*([^\n]+)"
         match = re.search(pattern, context)
+        if not match:
+            match = re.search(rf"\[KV\]\s*{re.escape(root_key)}\s*:\s*([^\n]+)", context)
         if not match:
             return None
         patch = KVPatch(match.group(1).strip())
@@ -264,7 +294,7 @@ class ExecutorAgent(BaseAgent):
             else:
                 continue
 
-            result.field_changes.append(
+            result.primary_effects.append(
                 StateChange(
                     path=target_path,
                     old_value=f"{current_value}/{hp_max}",
@@ -274,6 +304,7 @@ class ExecutorAgent(BaseAgent):
                 )
             )
 
+        self._sync_result_change_buckets(result)
         return result
 
     def run(self, task: TaskExecution) -> ExecutionResult:

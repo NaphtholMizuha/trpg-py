@@ -63,6 +63,15 @@ def _stringify_change_values(items: Any) -> Any:
     return normalized_items
 
 
+def _flatten_change_lists(*change_lists: Any) -> list[Any]:
+    flattened: list[Any] = []
+    for items in change_lists:
+        if not items:
+            continue
+        flattened.extend(items)
+    return flattened
+
+
 class TaskExecution(BaseModel):
     """Planner 输出并在工作流中流转的单步任务。"""
 
@@ -124,6 +133,9 @@ class ExecutionResult(BaseModel):
 
     task_id: str = ""
     success: bool = False
+    resource_costs: list[StateChange] = Field(default_factory=list)
+    primary_effects: list[StateChange] = Field(default_factory=list)
+    contingent_effects: list[StateChange] = Field(default_factory=list)
     field_changes: list[StateChange] = Field(default_factory=list)
     narration: str = ""
     triggered_chains: list[TriggeredChain] = Field(default_factory=list)
@@ -136,6 +148,9 @@ class ExecutionResult(BaseModel):
 
         normalized = dict(data)
 
+        normalized["resource_costs"] = _stringify_change_values(normalized.get("resource_costs"))
+        normalized["primary_effects"] = _stringify_change_values(normalized.get("primary_effects"))
+        normalized["contingent_effects"] = _stringify_change_values(normalized.get("contingent_effects"))
         normalized["field_changes"] = _stringify_change_values(normalized.get("field_changes"))
 
         triggered_chains = normalized.get("triggered_chains")
@@ -148,6 +163,18 @@ class ExecutionResult(BaseModel):
             normalized["narration"] = ""
 
         return normalized
+
+    @model_validator(mode="after")
+    def sync_change_buckets(self) -> "ExecutionResult":
+        if not any((self.resource_costs, self.primary_effects, self.contingent_effects)) and self.field_changes:
+            self.primary_effects = list(self.field_changes)
+
+        self.field_changes = _flatten_change_lists(
+            self.resource_costs,
+            self.primary_effects,
+            self.contingent_effects,
+        )
+        return self
 
 
 class ResolutionWindowRun(BaseModel):
@@ -163,6 +190,9 @@ class ResolutionWindowRun(BaseModel):
     target: str | None = None
     narration: str = ""
     state_snapshot: dict[str, str] = Field(default_factory=dict)
+    resource_costs: list[StateChange] = Field(default_factory=list)
+    primary_effects: list[StateChange] = Field(default_factory=list)
+    contingent_effects: list[StateChange] = Field(default_factory=list)
     field_changes: list[StateChange] = Field(default_factory=list)
     triggered_chains: list[TriggeredChain] = Field(default_factory=list)
 
@@ -178,6 +208,9 @@ class ResolutionWindowRun(BaseModel):
         if state_snapshot is None or state_snapshot == {}:
             normalized["state_snapshot"] = {}
 
+        normalized["resource_costs"] = _stringify_change_values(normalized.get("resource_costs"))
+        normalized["primary_effects"] = _stringify_change_values(normalized.get("primary_effects"))
+        normalized["contingent_effects"] = _stringify_change_values(normalized.get("contingent_effects"))
         normalized["field_changes"] = _stringify_change_values(normalized.get("field_changes"))
 
         triggered_chains = normalized.get("triggered_chains")
@@ -190,6 +223,18 @@ class ResolutionWindowRun(BaseModel):
             normalized["narration"] = ""
 
         return normalized
+
+    @model_validator(mode="after")
+    def sync_change_buckets(self) -> "ResolutionWindowRun":
+        if not any((self.resource_costs, self.primary_effects, self.contingent_effects)) and self.field_changes:
+            self.primary_effects = list(self.field_changes)
+
+        self.field_changes = _flatten_change_lists(
+            self.resource_costs,
+            self.primary_effects,
+            self.contingent_effects,
+        )
+        return self
 
     @classmethod
     def from_task_and_result(
@@ -210,6 +255,9 @@ class ResolutionWindowRun(BaseModel):
             target=task.target,
             narration=result.narration,
             state_snapshot=_build_task_state_snapshot(task),
+            resource_costs=result.resource_costs,
+            primary_effects=result.primary_effects,
+            contingent_effects=result.contingent_effects,
             field_changes=result.field_changes,
             triggered_chains=result.triggered_chains,
         )
@@ -268,7 +316,13 @@ class ResolutionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     window_id: str
+    final_resource_costs: list[StateChange] = Field(default_factory=list)
+    final_primary_effects: list[StateChange] = Field(default_factory=list)
+    final_contingent_effects: list[StateChange] = Field(default_factory=list)
     final_field_changes: list[StateChange] = Field(default_factory=list)
+    discarded_resource_costs: list[DiscardedStateChange] = Field(default_factory=list)
+    discarded_primary_effects: list[DiscardedStateChange] = Field(default_factory=list)
+    discarded_contingent_effects: list[DiscardedStateChange] = Field(default_factory=list)
     discarded_field_changes: list[DiscardedStateChange] = Field(default_factory=list)
     resolution_summary: str = ""
     dm_suggestions: list[str] = Field(default_factory=list)
@@ -281,8 +335,20 @@ class ResolutionResult(BaseModel):
 
         normalized = dict(data)
 
+        normalized["final_resource_costs"] = _stringify_change_values(normalized.get("final_resource_costs"))
+        normalized["final_primary_effects"] = _stringify_change_values(normalized.get("final_primary_effects"))
+        normalized["final_contingent_effects"] = _stringify_change_values(normalized.get("final_contingent_effects"))
         normalized["final_field_changes"] = _stringify_change_values(normalized.get("final_field_changes"))
 
+        normalized["discarded_resource_costs"] = _stringify_change_values(
+            normalized.get("discarded_resource_costs")
+        )
+        normalized["discarded_primary_effects"] = _stringify_change_values(
+            normalized.get("discarded_primary_effects")
+        )
+        normalized["discarded_contingent_effects"] = _stringify_change_values(
+            normalized.get("discarded_contingent_effects")
+        )
         normalized["discarded_field_changes"] = _stringify_change_values(
             normalized.get("discarded_field_changes")
         )
@@ -298,13 +364,38 @@ class ResolutionResult(BaseModel):
 
         return normalized
 
+    @model_validator(mode="after")
+    def sync_change_buckets(self) -> "ResolutionResult":
+        if not any((self.final_resource_costs, self.final_primary_effects, self.final_contingent_effects)) and self.final_field_changes:
+            self.final_primary_effects = list(self.final_field_changes)
+
+        if not any(
+            (
+                self.discarded_resource_costs,
+                self.discarded_primary_effects,
+                self.discarded_contingent_effects,
+            )
+        ) and self.discarded_field_changes:
+            self.discarded_primary_effects = list(self.discarded_field_changes)
+
+        self.final_field_changes = _flatten_change_lists(
+            self.final_resource_costs,
+            self.final_primary_effects,
+            self.final_contingent_effects,
+        )
+        self.discarded_field_changes = _flatten_change_lists(
+            self.discarded_resource_costs,
+            self.discarded_primary_effects,
+            self.discarded_contingent_effects,
+        )
+        return self
+
 
 class AgentState(TypedDict):
     """LangGraph Agent 状态。"""
 
     messages: Annotated[list[BaseMessage], add_messages]
     changes: Annotated[list[StateChange], lambda x, y: x + y]
-    task_queue: list[TaskExecution]
     _current_task: TaskExecution | None
     _planned_message_count: int
     _execution_result: ExecutionResult | None
@@ -353,6 +444,8 @@ def _match_kv_appendix(text: str) -> tuple[str, str] | None:
 def _match_context_kv_line(text: str) -> tuple[str, str] | None:
     match = text.strip()
     kv_match = re.match(r".*\[KV\s+([A-Za-z][A-Za-z0-9_.]*)\]\s*(.+)", match)
+    if kv_match is None:
+        kv_match = re.match(r".*\[KV\]\s*([A-Za-z][A-Za-z0-9_.]*)\s*:\s*(.+)", match)
     if kv_match is None:
         return None
     key = kv_match.group(1).strip()

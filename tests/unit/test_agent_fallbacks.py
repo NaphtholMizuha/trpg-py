@@ -77,6 +77,32 @@ def test_execution_result_normalizes_loose_json_shapes():
     assert result.triggered_chains == []
 
 
+def test_execution_result_syncs_categorized_changes_into_field_changes():
+    result = ExecutionResult.model_validate(
+        {
+            "task_id": "task_demo",
+            "resource_costs": {
+                "path": "Malik.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "task_demo",
+            },
+            "primary_effects": {
+                "path": "Aldera.combat.HP",
+                "old_value": "44/44",
+                "new_value": "33/44",
+                "operation": "MOD",
+                "source": "task_demo",
+            },
+        }
+    )
+
+    assert len(result.field_changes) == 2
+    assert result.resource_costs[0].path == "Malik.spell_slots.1环"
+    assert result.primary_effects[0].path == "Aldera.combat.HP"
+
+
 def test_executor_builds_explicit_key_hints():
     agent = object.__new__(ExecutorAgent)
     task = TaskExecution(
@@ -202,6 +228,32 @@ def test_resolution_result_normalizes_loose_json_shapes():
     assert result.discarded_field_changes[0].reason == "护盾术被更高优先级的法术反制。"
     assert result.resolution_summary == ""
     assert result.dm_suggestions == ["若引发新的规则问题，请由 DM 决定是否开启下一窗口。"]
+
+
+def test_resolution_result_syncs_categorized_changes_into_flattened_views():
+    result = ResolutionResult.model_validate(
+        {
+            "window_id": "window_demo",
+            "final_resource_costs": {
+                "path": "Malik.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "resolver:window_demo",
+            },
+            "final_primary_effects": {
+                "path": "Aldera.combat.HP",
+                "old_value": "44/44",
+                "new_value": "33/44",
+                "operation": "MOD",
+                "source": "resolver:window_demo",
+            },
+        }
+    )
+
+    assert len(result.final_field_changes) == 2
+    assert result.final_resource_costs[0].path == "Malik.spell_slots.1环"
+    assert result.final_primary_effects[0].path == "Aldera.combat.HP"
 
 
 def test_discarded_state_change_extends_state_change_contract():

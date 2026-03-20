@@ -59,15 +59,6 @@ def _apply_auto_confirm_defaults(task: TaskExecution) -> None:
     task.dm_notes = "\n".join(line for line in lines if line).strip()
 
 
-def _enqueue_task(state: AgentState, task: TaskExecution) -> None:
-    queue = state.get("task_queue", [])
-    queue.append(task)
-    print(f"\n⬇️  入队任务: {task.description[:50]}...")
-    _print_task_payload("Planner 产出的完整 TaskExecution", task)
-    state["task_queue"] = queue
-    print(f"   队列长度: {len(queue)} 个任务")
-
-
 def _extract_window_shared_context(context: str) -> list[str]:
     """从 task context 中抽取适合 resolver 复用的共享上下文。"""
     if not context:
@@ -196,14 +187,18 @@ def _ensure_active_window(
 def _materialize_resolution(window: ResolutionWindow) -> ResolutionResult:
     """最小 resolver：按 priority/order 排序后，对同 path 采用后者覆盖。"""
     sorted_runs = sorted(window.runs, key=lambda run: (run.priority, run.order))
-    final_by_path: dict[str, StateChange] = {}
-    discarded: list[DiscardedStateChange] = []
+    final_resource_by_path: dict[str, StateChange] = {}
+    final_primary_by_path: dict[str, StateChange] = {}
+    final_contingent_by_path: dict[str, StateChange] = {}
+    discarded_resource_costs: list[DiscardedStateChange] = []
+    discarded_primary_effects: list[DiscardedStateChange] = []
+    discarded_contingent_effects: list[DiscardedStateChange] = []
 
     for run in sorted_runs:
-        for change in run.field_changes:
-            previous = final_by_path.get(change.path)
+        for change in run.resource_costs:
+            previous = final_resource_by_path.get(change.path)
             if previous is not None:
-                discarded.append(
+                discarded_resource_costs.append(
                     DiscardedStateChange(
                         path=previous.path,
                         old_value=previous.old_value,
@@ -214,7 +209,49 @@ def _materialize_resolution(window: ResolutionWindow) -> ResolutionResult:
                         reason="同一路径字段变更被同窗口内更晚处理的结果覆盖。",
                     )
                 )
-            final_by_path[change.path] = StateChange(
+            final_resource_by_path[change.path] = StateChange(
+                path=change.path,
+                old_value=change.old_value,
+                new_value=change.new_value,
+                operation=change.operation,
+                source=f"resolver:{window.window_id}",
+            )
+        for change in run.primary_effects:
+            previous = final_primary_by_path.get(change.path)
+            if previous is not None:
+                discarded_primary_effects.append(
+                    DiscardedStateChange(
+                        path=previous.path,
+                        old_value=previous.old_value,
+                        new_value=previous.new_value,
+                        operation=previous.operation,
+                        source=previous.source,
+                        discarded_by=f"resolver:{window.window_id}",
+                        reason="同一路径字段变更被同窗口内更晚处理的结果覆盖。",
+                    )
+                )
+            final_primary_by_path[change.path] = StateChange(
+                path=change.path,
+                old_value=change.old_value,
+                new_value=change.new_value,
+                operation=change.operation,
+                source=f"resolver:{window.window_id}",
+            )
+        for change in run.contingent_effects:
+            previous = final_contingent_by_path.get(change.path)
+            if previous is not None:
+                discarded_contingent_effects.append(
+                    DiscardedStateChange(
+                        path=previous.path,
+                        old_value=previous.old_value,
+                        new_value=previous.new_value,
+                        operation=previous.operation,
+                        source=previous.source,
+                        discarded_by=f"resolver:{window.window_id}",
+                        reason="同一路径字段变更被同窗口内更晚处理的结果覆盖。",
+                    )
+                )
+            final_contingent_by_path[change.path] = StateChange(
                 path=change.path,
                 old_value=change.old_value,
                 new_value=change.new_value,
@@ -224,11 +261,15 @@ def _materialize_resolution(window: ResolutionWindow) -> ResolutionResult:
 
     return ResolutionResult(
         window_id=window.window_id,
-        final_field_changes=list(final_by_path.values()),
-        discarded_field_changes=discarded,
+        final_resource_costs=list(final_resource_by_path.values()),
+        final_primary_effects=list(final_primary_by_path.values()),
+        final_contingent_effects=list(final_contingent_by_path.values()),
+        discarded_resource_costs=discarded_resource_costs,
+        discarded_primary_effects=discarded_primary_effects,
+        discarded_contingent_effects=discarded_contingent_effects,
         resolution_summary=(
             f"resolver 收到 {len(window.runs)} 个 run，"
-            f"产出 {len(final_by_path)} 个最终字段变更。"
+            f"产出 {len(final_resource_by_path) + len(final_primary_by_path) + len(final_contingent_by_path)} 个最终字段变更。"
         ),
         dm_suggestions=["若本窗口结算后引发新的规则问题，请由 DM 决定是否开启下一窗口。"],
     )
@@ -240,36 +281,29 @@ def create_planner_node(planner_agent):
     def planner_node(state: AgentState) -> Command:
         messages = state["messages"]
         current_task = state.get("_current_task")
-        queue = state.get("task_queue", [])
         planned_message_count = state.get("_planned_message_count", 0)
 
-        print(f"\n[planner] 进入: queue={len(queue)}")
+        print(f"\n[planner] 进入")
 
         if current_task is not None:
             print(f"   当前任务完成: {current_task.description[:40]}...")
             state["_current_task"] = None
+            current_task = None
 
         last_message = messages[-1] if messages else None
         if (
             isinstance(last_message, HumanMessage)
-            and not queue
             and not current_task
             and len(messages) > planned_message_count
         ):
             user_input = last_message.content
             print(f"\n🎮 DM: {user_input}")
-            tasks = planner_agent.plan(user_input)
-            for task in tasks:
-                _enqueue_task(state, task)
+            task = planner_agent.plan(user_input)
+            print(f"\n⬇️  生成任务: {task.description[:50]}...")
+            _print_task_payload("Planner 产出的完整 TaskExecution", task)
             state["_planned_message_count"] = len(messages)
-
-        queue = state.get("task_queue", [])
-        state["task_queue"] = queue
-        if queue:
-            task = queue.pop(0)
-            state["task_queue"] = queue
             state["_current_task"] = task
-            print(f"\n📋 出队任务: {task.description[:50]}...")
+            print(f"\n📋 准备任务: {task.description[:50]}...")
             _print_task_payload("即将发送到 Executor 的 TaskExecution", task)
             return Command(goto="task_approval", update=state)
 
@@ -538,11 +572,15 @@ def create_commiter_node(write_fields_tool):
                 print("   写回结果:")
                 print("未应用任何变更")
                 print("📝 已应用 0 个状态变更")
-                _enqueue_triggered_chains(state, result, task)
+                next_chain_task = _extract_first_triggered_chain_task(result, task)
                 if not result.success:
                     logger.warning("Executor 未产生有效结果", task_id=task.task_id, narration=result.narration)
                 state["_execution_result"] = None
-                state["_current_task"] = None
+                state["_current_task"] = next_chain_task
+                if next_chain_task is not None:
+                    print(f"\n📋 进入后续任务: {next_chain_task.description[:50]}...")
+                    _print_task_payload("即将发送到 Executor 的 TaskExecution", next_chain_task)
+                    return Command(goto="task_approval", update=state)
                 return Command(goto="planner", update=state)
             tool_output = write_fields_tool.invoke(payload)
             print("   写回结果:")
@@ -554,31 +592,36 @@ def create_commiter_node(write_fields_tool):
         else:
             print("   无字段变更需要写回")
 
-        _enqueue_triggered_chains(state, result, task)
+        next_chain_task = _extract_first_triggered_chain_task(result, task)
 
         if not result.success:
             logger.warning("Executor 未产生有效结果", task_id=task.task_id, narration=result.narration)
 
         state["_execution_result"] = None
-        state["_current_task"] = None
+        state["_current_task"] = next_chain_task
         state["pending_window_priority"] = None
+        if next_chain_task is not None:
+            print(f"\n📋 进入后续任务: {next_chain_task.description[:50]}...")
+            _print_task_payload("即将发送到 Executor 的 TaskExecution", next_chain_task)
+            return Command(goto="task_approval", update=state)
         return Command(goto="planner", update=state)
 
     return commiter_node
 
 
-def _enqueue_triggered_chains(state: AgentState, result: ExecutionResult, task: TaskExecution) -> None:
+def _extract_first_triggered_chain_task(result: ExecutionResult, task: TaskExecution) -> TaskExecution | None:
     if not result.triggered_chains:
-        return
-    for chain in result.triggered_chains:
-        chain_task = TaskExecution(
-            task_id=chain.task_id or f"chain_{task.task_id}_{len(state.get('task_queue', []))}",
-            description=chain.description or "连锁任务",
-            context=chain.context or chain.description or "连锁任务",
-            actor=chain.actor,
-            target=chain.target,
-            source="chain",
-            dm_notes=chain.dm_notes,
-            task_category=chain.task_category,
-        )
-        _enqueue_task(state, chain_task)
+        return None
+    chain = result.triggered_chains[0]
+    if len(result.triggered_chains) > 1:
+        logger.warning("当前工作流仅支持单条后续任务，额外 triggered_chains 将被忽略", task_id=task.task_id, chains=len(result.triggered_chains))
+    return TaskExecution(
+        task_id=chain.task_id or f"chain_{task.task_id}",
+        description=chain.description or "连锁任务",
+        context=chain.context or chain.description or "连锁任务",
+        actor=chain.actor,
+        target=chain.target,
+        source="chain",
+        dm_notes=chain.dm_notes,
+        task_category=chain.task_category,
+    )
