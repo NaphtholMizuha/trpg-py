@@ -9,3 +9,6 @@ data/
 # Virtual environments
 .venv
 data/dnd-5e-srd-markdown
+.env
+.claude
+out/

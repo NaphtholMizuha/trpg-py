@@ -1,0 +1,17 @@
+=== 核心模块
+
+- *DeepPlannerAgent*：将 DM 的自然语言输入收敛为单步 `TaskExecution`，按需读取世界状态、检索规则，并补全 actor、target 与可写字段；
+- *ExecutorAgent*：专注单步规则执行与数值结算，在必要时调用掷骰/求值工具，输出字段级状态变更、叙述结果与候选连锁任务；
+- *ResolverAgent*：围绕同一 `ResolutionWindow` 合并多次执行结果，裁决冲突与覆盖关系，筛除失效变更，并向 DM 输出结算摘要与后续建议；
+- *LangGraph 工作流*：串联 `planner -> task_approval -> executor -> window_review -> resolver -> commiter -> planner`，形成可中断、可恢复的主持辅助闭环；
+- *规则检索器*：基于 Dense + BM25 + Rerank 的混合检索链路，为复杂规则问题提供精准召回与重排序结果；
+- *KV 世界状态存储*：以扁平 key 与字段级 patch 管理世界状态，兼容 txt/toml 持久化，并自动维护 combat、spell_slots 等摘要字段；
+- *权限隔离工具箱*：封装 `search`、`read`、`fetch_keys`、`evaluate`、`write_fields` 等原子工具，并按 Agent 职责限制读写权限，避免越权操作。
+
+=== 功能描述
+
+- *三段式 Agent 分责*：采用 Planner / Executor / Resolver 架构，将“意图理解与上下文收集”“规则计算与结果生成”“同窗口合并裁决”拆分开来，降低单个 Agent 的职责耦合与输出不稳定性。
+- *结算窗口与响应链处理*：通过 `ResolutionWindow` 收拢主动作与响应动作，结合优先级与执行顺序处理护盾术、反制等中断式效果，再统一产出最终生效的状态变更。
+- *RAG 驱动的规则辅助*：使用混合召回与重排序机制检索 D&D 5e SRD 规则，在复杂判定、时机冲突与条文比对场景下为 Agent 提供可靠依据；底层检索能力可替换，便于迁移到其他 TRPG 系统。
+- *Human-in-the-loop 断点控制*：在任务审批与窗口复核等关键节点保留 DM 确认、拒绝与批注入口，让 AI 负责整理、计算与提示，人类主持人保留最终裁决权。
+- *安全的字段级状态提交*：执行器与裁决器只返回结构化字段变更，不直接写入世界状态；最终由独立 commiter 统一提交并校验路径合法性，减少幻觉 key、整段覆盖与越权写入风险。

@@ -1,65 +1,79 @@
 """
-TrpgToolkit - 组合 Logic、RAG、State 的 LangChain 工具箱
+TrpgToolkit - 极简工具箱
+仅包含 5 个核心工具:
+- search: RAG 检索
+- evaluate: 执行 Roll() 表达式
+- fetch_keys: 获取所有 key 列表
+- read: 读取指定 key(s) 的值
+- write: ADD/MOD/DEL 状态变更
 """
+import re
 
-from typing import Any, Literal, ClassVar
-from difflib import get_close_matches
-
-from langchain_core.tools import BaseTool, BaseToolkit
 from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool, BaseToolkit
 
 from .logic import LogicEngine
 from .rag import Retriever
-from .state import StateManager
+from .kv_state import KVStateStore
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # ============================================
 # 工具输入 Schema
 # ============================================
 
-
 class SearchInput(BaseModel):
     """RAG 检索工具输入"""
-    query: str = Field(description="搜索查询文本")
-    limit: int = Field(default=3, description="返回结果数量")
+    query: str = Field(
+        description=(
+            "用于检索规则的自然语言查询。"
+            "优先用 1 到 3 句话完整描述当前规则问题，包括动作/法术/状态名称、参与对象、触发条件、"
+            "想确认的判定或结论。"
+            "保留关键术语、数值阈值和专有名词，但不要只写关键词堆砌。"
+            "推荐示例: “5e 中，角色在近战范围内对远处目标进行远程法术攻击时，是否因敌人在 5 尺内而劣势？"
+            "如果施放的是 fire bolt，需要看哪条规则？”"
+        )
+    )
+    limit: int = Field(default=2, description="返回结果数量")
 
 
-class EvaluateMechanicsInput(BaseModel):
+class EvaluateInput(BaseModel):
     """表达式求值工具输入"""
-    expression: str = Field(description="要执行的表达式，支持掷骰函数 Roll('XdY') 和点分隔状态路径引用，支持比较操作符如 >, < ,==, >=, <=, !=")
-
-
-class FetchSchemaInput(BaseModel):
-    """获取状态 schema 工具输入（无参数）"""
-    pass
-
-
-class PatchOperation(BaseModel):
-    """单个修补操作"""
-    op: Literal["set", "delete", "add", "subtract", "multiply", "divide", "append"] = Field(
-        description="操作类型: set(设置), delete(删除), add(数值加), subtract(数值减), multiply(数值乘), divide(数值除), append(列表追加)"
-    )
-    path: str = Field(description="目标路径，点分隔符表示层级，如 entities.warrior.hp")
-    value: Any | None = Field(
-        default=None,
-        description="操作值。set/add/subtract/multiply/divide/append 需要。delete 不需要"
+    expression: str = Field(
+        description="要执行的表达式，支持掷骰函数 Roll('XdY') 和数值运算。"
+                    "示例: \"Roll('1d20') + 3 >= 15\", \"Roll('2d6') + 4\", \"Roll('2d6') if Roll('1d20') >= 15 else 0\""
     )
 
 
-class BatchPatchInput(BaseModel):
-    """批量修补状态工具输入"""
-    patches: list[PatchOperation] = Field(description="修补操作列表，按顺序执行")
-
-
-class BatchGetInput(BaseModel):
-    """批量获取状态工具输入"""
-    paths: list[str] = Field(description="要获取的路径列表")
+class ReadInput(BaseModel):
+    """读取状态工具输入"""
+    keys: list[str] = Field(
+        description="要读取的状态键列表，如 ['Aldera.combat', 'Goblin.status']。"
+                    "支持批量读取多个key。"
+    )
 
 
 class FetchKeysInput(BaseModel):
-    """路径检索工具输入"""
-    keys: str = Field(description="查询关键词，如'艾尔德拉 hp'、'goblin ac'。支持多个关键词用空格分隔")
-    top_k: int = Field(default=3, description="返回最匹配的候选路径数量")
+    """获取所有key列表工具输入"""
+    pass
+
+
+class WriteInput(BaseModel):
+    """写入状态工具输入"""
+    operations: list[dict] = Field(
+        description="操作列表，支持 ADD(添加), MOD(修改), DEL(删除)。"
+                    "示例: [{\"op\": \"MOD\", \"key\": \"Aldera.combat\", \"value\": \"HP: 38/44...\"}]"
+    )
+
+
+class WriteFieldsInput(BaseModel):
+    """批量写入字段变更工具输入"""
+    field_changes: list[dict] = Field(
+        description="字段级变更列表。每个变更包含: key, field, old_value, new_value, operation。"
+                    "示例: [{\"key\": \"Aldera.combat\", \"field\": \"HP\", \"old_value\": \"44/44\", \"new_value\": \"38/44\", \"operation\": \"MOD\"}]"
+    )
 
 
 # ============================================
@@ -67,336 +81,278 @@ class FetchKeysInput(BaseModel):
 # ============================================
 
 class SearchTool(BaseTool):
-    """RAG 检索工具"""
+    """RAG 检索工具 - 搜索 D&D 5e SRD 规则文档"""
     name: str = "search"
-    description: str = "搜索 D&D 5e SRD 规则文档，返回相关规则说明"
+    description: str = (
+        "搜索 D&D 5e SRD 规则文档，返回相关规则说明。"
+        "这个检索器支持语义检索与关键词混合召回，因此 query 应优先写成完整的规则问题或场景描述，"
+        "说明当前动作、实体、条件和想确认的结论，而不是只提交几个关键词。"
+        "如果一个问题包含多个独立规则点，优先拆成多次更聚焦的查询。"
+    )
     args_schema: type[BaseModel] = SearchInput
 
     retriever: Retriever = Field(exclude=True)
 
-    def _run(self, query: str, limit: int = 3) -> str:
-        results = self.retriever.search(query, limit=limit)
-        if not results:
-            return "未找到相关结果"
+    def _run(self, query: str, limit: int = 2) -> str:
+        _log_tool_start(self.name, query=query, limit=limit)
+        try:
+            results = self.retriever.search(query, limit=limit)
+            if not results:
+                output = "未找到相关结果"
+                _log_tool_success(self.name, output)
+                return output
 
-        output_lines = []
-        for i, result in enumerate(results, 1):
-            score = result.get("score", 0)
-            content = result.get("content", "")
-            metadata = result.get("metadata", {})
-            title = metadata.get("title", "无标题")
-            file = metadata.get("file", "未知")
+            output_lines = []
+            for i, result in enumerate(results, 1):
+                score = result.get("score", 0)
+                content = _truncate_text(result.get("content", ""), 220)
+                metadata = result.get("metadata", {})
+                title = metadata.get("title", "无标题")
+                file = metadata.get("file", "未知")
 
-            output_lines.append(f"[{i}] {title} (来源: {file}, 相关性: {score:.2f})")
-            output_lines.append(content)
+                output_lines.append(f"[{i}] {title} (来源: {file}, 相关性: {score:.2f})")
+                output_lines.append(content)
 
-            parent = result.get("parent_content")
-            if parent:
-                output_lines.append(f"上下文: {parent}")
+                output_lines.append("")
 
-            output_lines.append("")
+            output = "\n".join(output_lines)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
-        return "\n".join(output_lines)
 
-
-class EvaluateMechanicsTool(BaseTool):
-    """表达式求值工具（掷骰+状态引用）"""
-    name: str = "evaluate_mechanics"
-    description: str = "执行游戏机制表达式，支持掷骰 Roll('XdY') 和状态路径引用（如 entities.warrior.hp）"
-    args_schema: type[BaseModel] = EvaluateMechanicsInput
+class EvaluateTool(BaseTool):
+    """表达式求值工具 - 执行掷骰和数值运算"""
+    name: str = "evaluate"
+    description: str = (
+        "执行游戏机制表达式，支持掷骰 Roll('XdY') 和数值运算。"
+        "示例: Roll('1d20') + 3 >= 15, Roll('2d6') + 4"
+    )
+    args_schema: type[BaseModel] = EvaluateInput
 
     logic_engine: LogicEngine = Field(exclude=True)
-    state_manager: StateManager = Field(exclude=True)
 
     def _run(self, expression: str) -> str:
-        state = self.state_manager.snapshot()
-        result = self.logic_engine.eval(expression, state)
-        return f"结果: {result.result}\n轨迹: {result.resolved}"
+        try:
+            _log_tool_start(self.name, expression=expression)
+            if not _is_safe_evaluate_expression(expression):
+                output = "执行错误: 非法表达式，仅允许掷骰、数值计算或真假判断"
+                _log_tool_success(self.name, output)
+                return output
+            result = self.logic_engine.eval(expression)
+            output = f"结果: {result.result}\n轨迹: {result.resolved}"
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            return f"执行错误: {exc}"
 
 
-class FetchSchemaTool(BaseTool):
-    """获取状态 schema 工具"""
-    name: str = "fetch_schema"
-    description: str = "获取当前世界状态的类型结构 schema"
-    args_schema: type[BaseModel] = FetchSchemaInput
+class ReadTool(BaseTool):
+    """读取状态工具 - 读取指定key(s)的KV记忆value
 
-    state_manager: StateManager = Field(exclude=True)
+    使用场景：
+    - 获取单个key: keys=["Aldera.combat"]
+    - 批量获取: keys=["Aldera.combat", "Goblin.status"]
+    - 获取所有: 先调用 fetch_keys，再用 read 批量获取
+    """
+    name: str = "read"
+    description: str = """读取指定key(s)的KV记忆value。
 
-    def _run(self) -> str:
-        import json
-        schema = self.state_manager.get_schema()
-        return json.dumps(schema, ensure_ascii=False, indent=2)
+使用场景：
+- 获取单个key: keys=["Aldera.combat"]
+- 批量获取: keys=["Aldera.combat", "Goblin.status"]
+- 获取所有: 先调用 fetch_keys，再用 read 批量获取
+"""
+    args_schema: type[BaseModel] = ReadInput
 
+    store: KVStateStore = Field(exclude=True)
 
-class BatchPatchTool(BaseTool):
-    """批量修补状态工具，支持增删改和数值操作"""
-    name: str = "modify_state"
-    description: str = (
-        "批量修改世界状态。支持操作: "
-        "set(设置值), delete(删除), add(数值加), subtract(数值减), "
-        "multiply(数值乘), divide(数值除), append(向列表追加元素)"
-    )
-    args_schema: type[BaseModel] = BatchPatchInput
-
-    state_manager: StateManager = Field(exclude=True)
-
-    def _run(self, patches: list[PatchOperation]) -> str:
-        results = []
-        for patch in patches:
-            op, path, value = patch.op, patch.path, patch.value
-            try:
-                if op == "set":
-                    if value is None:
-                        results.append(f"❌ set 操作需要 value: {path}")
-                        continue
-                    self.state_manager.set(path, value)
-                    results.append(f"✓ set {path} = {value}")
-
-                elif op == "delete":
-                    deleted = self.state_manager.delete(path)
-                    results.append(f"✓ delete {path} (原值: {deleted})")
-
-                elif op == "add":
-                    if value is None:
-                        results.append(f"❌ add 操作需要 value: {path}")
-                        continue
-                    new_val = self.state_manager.add(path, value)
-                    results.append(f"✓ add {path} += {value} → {new_val}")
-
-                elif op == "subtract":
-                    if value is None:
-                        results.append(f"❌ subtract 操作需要 value: {path}")
-                        continue
-                    new_val = self.state_manager.subtract(path, value)
-                    results.append(f"✓ subtract {path} -= {value} → {new_val}")
-
-                elif op == "multiply":
-                    if value is None:
-                        results.append(f"❌ multiply 操作需要 value: {path}")
-                        continue
-                    new_val = self.state_manager.multiply(path, value)
-                    results.append(f"✓ multiply {path} *= {value} → {new_val}")
-
-                elif op == "divide":
-                    if value is None:
-                        results.append(f"❌ divide 操作需要 value: {path}")
-                        continue
-                    new_val = self.state_manager.divide(path, value)
-                    results.append(f"✓ divide {path} /= {value} → {new_val}")
-
-                elif op == "append":
-                    if value is None:
-                        results.append(f"❌ append 操作需要 value: {path}")
-                        continue
-                    # 获取当前列表并追加
-                    current = self.state_manager.get(path)
-                    if not isinstance(current, list):
-                        results.append(f"❌ append 目标不是列表: {path}")
-                        continue
-                    current.append(value)
-                    results.append(f"✓ append to {path}: {value}")
-
+    def _run(self, keys: list[str]) -> str:
+        _log_tool_start(self.name, keys=keys)
+        try:
+            results = []
+            for key in keys:
+                value = self.store.get(key)
+                if value:
+                    results.append(f"[{key}] {_truncate_text(value, 160)}")
                 else:
-                    results.append(f"❌ 未知操作: {op}")
-
-            except Exception as e:
-                results.append(f"❌ {op} {path} 失败: {e}")
-
-        return "\n".join(results)
-
-
-class BatchGetTool(BaseTool):
-    """批量获取状态工具"""
-    name: str = "batch_get"
-    description: str = "批量获取指定路径的状态值"
-    args_schema: type[BaseModel] = BatchGetInput
-
-    state_manager: StateManager = Field(exclude=True)
-
-    def _run(self, paths: list[str]) -> str:
-        import json
-        result = {}
-        for path in paths:
-            try:
-                result[path] = self.state_manager.get(path)
-            except KeyError:
-                result[path] = None
-        return json.dumps(result, ensure_ascii=False)
+                    results.append(f"[{key}] 不存在")
+            output = "\n".join(results)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 class FetchKeysTool(BaseTool):
-    """
-    路径检索工具 - 使用LLM根据查询关键词返回候选的属性路径。
-    
-    接收类似"艾尔德拉 hp"的关键词，内部调用LLM分析schema并返回最匹配的候选路径（默认3个）。
-    主LLM应该根据返回的路径列表，选择最合适的路径来使用。
-    """
+    """获取所有key列表工具"""
     name: str = "fetch_keys"
-    description: str = (
-        "根据查询关键词检索候选的状态路径。内部使用LLM分析世界状态schema。"
-        "输入如'艾尔德拉 hp'、'goblin ac'等关键词，返回最匹配的属性路径列表。"
-        "你应该根据返回的候选路径，选择最合适的路径用于batch_get或modify_state。"
-    )
+    description: str = "获取所有KV记忆的key列表"
     args_schema: type[BaseModel] = FetchKeysInput
 
-    state_manager: StateManager = Field(exclude=True)
-    llm: Any = Field(exclude=True)  # LLM客户端，用于分析路径
+    store: KVStateStore = Field(exclude=True)
 
-    def _run(self, keys: str, top_k: int = 3) -> str:
-        import json
-        
-        # 1. 准备schema和路径信息
-        schema_info = self._build_schema_info()
-        all_paths = self._collect_candidate_paths()
-        
-        # 2. 构造prompt让LLM分析
-        prompt = self._build_prompt(keys, schema_info, all_paths, top_k)
-        
-        # 3. 调用LLM分析
+    def _run(self) -> str:
+        _log_tool_start(self.name)
         try:
-            response = self.llm.invoke(prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
-        except Exception as e:
-            return json.dumps({
-                "error": f"LLM分析失败: {e}",
-                "query": keys
-            }, ensure_ascii=False)
-        
-        # 4. 解析LLM返回的路径
-        candidate_paths = self._parse_llm_response(content, all_paths)
-        
-        # 5. 验证路径并获取值预览
-        results = []
-        for path in candidate_paths[:top_k]:
-            try:
-                value = self.state_manager.get(path)
-                value_preview = str(value)[:80] + "..." if len(str(value)) > 80 else str(value)
-                results.append({
-                    "path": path,
-                    "value_preview": value_preview
-                })
-            except KeyError:
-                results.append({
-                    "path": path,
-                    "value_preview": "[路径无效]"
-                })
-        
-        return json.dumps({
-            "query": keys,
-            "candidates": results,
-            "llm_reasoning": content  # 可选：返回LLM的推理过程供参考
-        }, ensure_ascii=False, indent=2)
-    
-    def _collect_candidate_paths(self) -> list[str]:
-        """收集所有候选路径（叶子节点）"""
-        return [path for path, _ in self.state_manager.get_all_leaf_paths()]
-    
-    def _build_schema_info(self) -> dict:
-        """构建简化的schema信息，包含实体名称映射"""
-        state = self.state_manager.snapshot()
-        info = {
-            "entities": {},  # name -> {id, category, path_prefix}
-            "path_prefixes": []  # 可用的路径前缀
-        }
-        
-        for category in ["players", "enemies", "objects"]:
-            entities = state.get("entity", {}).get(category, {})
-            for eid, edata in entities.items():
-                name = edata.get("name", "")
-                prefix = f"entity.{category}.{eid}"
-                info["path_prefixes"].append(prefix)
-                if name:
-                    info["entities"][name] = {
-                        "id": eid,
-                        "category": category,
-                        "prefix": prefix
-                    }
-        
-        return info
-    
-    def _build_prompt(self, query: str, schema_info: dict, all_paths: list[str], top_k: int) -> str:
-        """构造LLM分析prompt"""
-        import json
-        # 限制路径数量，避免prompt过长
-        max_paths = 100
-        paths_sample = all_paths[:max_paths]
-        if len(all_paths) > max_paths:
-            paths_sample.append(f"... 还有 {len(all_paths) - max_paths} 个路径")
-        
-        entities_str = json.dumps(schema_info["entities"], ensure_ascii=False, indent=2)
-        paths_str = "\n".join(f"  - {p}" for p in paths_sample)
-        
-        prompt = f"""你是一个路径分析助手。根据用户的查询关键词，从世界状态的所有可用路径中，选出最匹配的候选路径。
+            keys = self.store.get_keys()
+            if not keys:
+                output = "当前没有可用的keys"
+                _log_tool_success(self.name, output)
+                return output
+            output = "可用的keys:\n" + "\n".join(sorted(keys))
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
-## 世界状态中的实体
-{entities_str}
 
-## 所有可用的属性路径（部分）
-{paths_str}
+class WriteTool(BaseTool):
+    """写入状态工具 - 修改KV状态
 
-## 用户的查询
-"{query}"
+    支持 ADD(添加), MOD(修改), DEL(删除) 操作。
+    value 必须是完整的自然语言段落。
+    """
+    name: str = "write"
+    description: str = """修改KV状态。支持 ADD(添加), MOD(修改), DEL(删除) 操作。
 
-## 你的任务
-1. 分析查询中的实体名称（如"艾尔德拉"、"地精"、"火药桶"）和属性（如"hp"、"ac"、"位置"）
-2. 根据实体名称匹配到对应的实体ID（如 player_01、goblin_01）
-3. 根据属性名匹配到对应的路径
-4. 返回最匹配的 {top_k} 个候选路径
+使用示例:
+- 修改状态: [{"op": "MOD", "key": "Aldera.combat", "value": "HP: 38/44 | AC: 18..."}]
+- 添加新key: [{"op": "ADD", "key": "NewNPC.combat", "value": "HP: 20/20..."}]
+- 删除key: [{"op": "DEL", "key": "DefeatedEnemy.combat"}]
 
-## 常见属性对应关系参考
-- "hp"、"生命值" -> current_hp, max_hp, temp_hp
-- "ac"、"护甲" -> armor_class, ac
-- "str"、"力量" -> strength
-- "dex"、"敏捷" -> dexterity
-- "位置" -> position
-- "状态" -> state, conditions
-
-## 输出格式
-只返回路径列表，每行一个路径，不要其他解释：
-```
-entity.players.player_01.combat.current_hp
-entity.players.player_01.combat.max_hp
-```
+注意: value 必须是完整的自然语言段落，不是单个字段。
 """
-        return prompt
-    
-    def _parse_llm_response(self, content: str, valid_paths: list[str]) -> list[str]:
-        """解析LLM返回的路径列表"""
-        import re
-        
-        # 尝试从代码块中提取
-        code_block_pattern = r'```(?:\w+)?\n(.*?)```'
-        matches = re.findall(code_block_pattern, content, re.DOTALL)
-        if matches:
-            content = matches[-1]  # 取最后一个代码块
-        
-        # 提取所有看起来像路径的行
-        candidates = []
-        for line in content.strip().split('\n'):
-            line = line.strip()
-            # 过滤掉空行和注释
-            if not line or line.startswith('#') or line.startswith('//'):
-                continue
-            # 检查是否包含点分路径特征
-            if '.' in line and not line.startswith('`'):
-                # 清理可能的列表标记
-                line = re.sub(r'^[-*•]\s*', '', line)
-                candidates.append(line)
-        
-        # 验证路径是否存在于有效路径列表中（或作为前缀匹配）
-        valid_set = set(valid_paths)
-        verified = []
-        for cand in candidates:
-            if cand in valid_set:
-                verified.append(cand)
-            else:
-                # 尝试作为前缀匹配
-                for vp in valid_paths:
-                    if vp.startswith(cand) or cand in vp:
-                        verified.append(vp)
-                        break
-        
-        return verified[:10]  # 最多返回10个
+    args_schema: type[BaseModel] = WriteInput
+
+    store: KVStateStore = Field(exclude=True)
+
+    def _run(self, operations: list[dict]) -> str:
+        _log_tool_start(self.name, operations=operations)
+        try:
+            success, changes = self.store.patch(operations)
+
+            if not changes:
+                output = "未应用任何变更"
+                _log_tool_success(self.name, output)
+                return output
+
+            lines = []
+            for c in changes:
+                if c.operation == "ADD":
+                    new_preview = (c.new_value[:50] + "...") if c.new_value else "None"
+                    lines.append(f"✓ ADD [{c.key}] = {new_preview}")
+                elif c.operation == "MOD":
+                    old_preview = (c.old_value[:30] + "...") if c.old_value else "None"
+                    new_preview = (c.new_value[:50] + "...") if c.new_value else "None"
+                    lines.append(f"✓ MOD [{c.key}]: {old_preview} → {new_preview}")
+                elif c.operation == "DEL":
+                    old_preview = (c.old_value[:50] + "...") if c.old_value else "None"
+                    lines.append(f"✓ DEL [{c.key}] (原值: {old_preview})")
+
+            status = "成功" if success else "部分失败"
+            output = f"[{status}] 应用了 {len(changes)} 个变更:\n" + "\n".join(lines)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
+
+
+class WriteFieldsTool(BaseTool):
+    """批量写入字段变更工具 - Executor使用
+
+    接收字段级变更列表，自动读取当前值、应用变更、写回KV。
+    相当于将原Writer节点的功能封装为工具。
+    """
+    name: str = "write_fields"
+    description: str = """批量应用字段级变更到KV状态。
+
+使用场景：Executor执行计算后，将生成的字段变更写入状态。
+
+参数格式:
+field_changes: [
+  {"key": "Aldera.combat", "field": "HP", "old_value": "44/44", "new_value": "38/44", "operation": "MOD"},
+  {"key": "Goblin.status", "field": "状态", "old_value": "存活", "new_value": "死亡", "operation": "MOD"}
+]
+
+注意:
+- 工具会自动读取当前完整值，应用字段变更，然后写回
+- 无需手动构建完整的value，只需指定字段变更
+- operation支持: MOD(修改), DEL(删除字段)
+"""
+    args_schema: type[BaseModel] = WriteFieldsInput
+
+    store: KVStateStore = Field(exclude=True)
+
+    def _run(self, field_changes: list[dict]) -> str:
+        from ..utils.kv_patch import KVPatch
+
+        _log_tool_start(self.name, field_changes=field_changes)
+        try:
+            if not field_changes:
+                output = "无字段变更需要应用"
+                _log_tool_success(self.name, output)
+                return output
+
+            applied_count = 0
+            lines = []
+
+            for fc in field_changes:
+                try:
+                    # 支持 key+field 或 path 两种格式
+                    key = fc.get("key", "")
+                    field = fc.get("field", "")
+                    path = fc.get("path", "")
+
+                    # 如果提供了 path，从中提取 key 和 field
+                    if path and not key:
+                        parts = path.rsplit(".", 1)
+                        if len(parts) == 2:
+                            key, field = parts
+                        else:
+                            key = path
+                            field = ""
+
+                    old_value = fc.get("old_value", "")
+                    new_value = fc.get("new_value", "")
+                    operation = fc.get("operation", "MOD")
+
+                    if not key or key.startswith("task_") or key not in self.store.get_keys():
+                        raise ValueError("只允许写入已存在的 world-state key")
+                    if not field:
+                        raise ValueError("字段级写入必须提供 field")
+
+                    current_full = self.store.get(key) or ""
+                    patch = KVPatch(current_full)
+
+                    if operation == "DEL":
+                        patch.remove_field(field)
+                    else:
+                        patch.set_field(field, new_value)
+
+                    new_full = patch.to_string()
+                    self.store.set(key, new_full)
+
+                    applied_count += 1
+                    lines.append(f"✓ {key}.{field}: {old_value} → {new_value}")
+
+                except Exception as exc:
+                    err_key = key or fc.get("key", "?") or fc.get("path", "?")
+                    err_field = field or fc.get("field", "?")
+                    lines.append(f"✗ {err_key}.{err_field}: 失败 - {exc}")
+
+            output = f"[成功] 应用了 {applied_count}/{len(field_changes)} 个字段变更:\n" + "\n".join(lines)
+            _log_tool_success(self.name, output)
+            return output
+        except Exception as exc:
+            _log_tool_error(self.name, exc)
+            raise
 
 
 # ============================================
@@ -404,17 +360,16 @@ entity.players.player_01.combat.max_hp
 # ============================================
 
 class TrpgToolkit(BaseToolkit):
-    """TRPG 工具箱，组合 Logic、RAG、State 三个核心类"""
+    """TRPG 极简工具箱 - 仅包含 5 个核心工具"""
 
-    def __init__(self, initial_state: dict[str, Any] | None = None, llm=None, **kwargs):
-        self._state_manager = StateManager(initial_state)
+    def __init__(self, world_state_path: str = "data/world_state.txt", persist: bool = False, **kwargs):
+        self._store = KVStateStore(world_state_path, persist=persist)
         self._logic_engine = LogicEngine()
         self._retriever = Retriever(**kwargs)
-        self._llm = llm  # 可选的LLM客户端，用于fetchkeys
 
     @property
-    def state_manager(self) -> StateManager:
-        return self._state_manager
+    def store(self) -> KVStateStore:
+        return self._store
 
     @property
     def logic_engine(self) -> LogicEngine:
@@ -428,12 +383,62 @@ class TrpgToolkit(BaseToolkit):
         """返回所有工具"""
         return [
             SearchTool(retriever=self._retriever),
-            EvaluateMechanicsTool(
-                logic_engine=self._logic_engine,
-                state_manager=self._state_manager
-            ),
-            FetchSchemaTool(state_manager=self._state_manager),
-            BatchPatchTool(state_manager=self._state_manager),
-            BatchGetTool(state_manager=self._state_manager),
-            FetchKeysTool(state_manager=self._state_manager, llm=self._llm),
+            EvaluateTool(logic_engine=self._logic_engine),
+            FetchKeysTool(store=self._store),
+            ReadTool(store=self._store),
+            WriteTool(store=self._store),
+            WriteFieldsTool(store=self._store),
         ]
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    """截断工具返回，避免将过长文本反复送回 ReAct 上下文。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "... [截断]"
+
+
+def _truncate_repr(value: object, limit: int = 200) -> str:
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "... [截断]"
+
+
+def _log_tool_start(tool_name: str, **kwargs: object) -> None:
+    payload = {key: _truncate_repr(value) for key, value in kwargs.items()}
+    logger.info(f"▶ 调用工具 [{tool_name}]", tool=tool_name, args=payload)
+
+
+def _log_tool_success(tool_name: str, result: str) -> None:
+    logger.debug(f"✓ 工具完成 [{tool_name}]", tool=tool_name, result=_truncate_text(result, 300))
+
+
+def _log_tool_error(tool_name: str, exc: Exception) -> None:
+    logger.exception(f"✗ 工具失败 [{tool_name}]: {exc}", tool=tool_name)
+
+
+def _is_safe_evaluate_expression(expression: str) -> bool:
+    if not expression or not expression.strip():
+        return False
+
+    expr = expression.strip()
+    if any(token in expr for token in (";", "\n", "let ", "var ", "const ", "//")):
+        return False
+    if re.search(r"[\u4e00-\u9fff]", expr):
+        return False
+    if re.fullmatch(r"""["'].*["']""", expr):
+        return False
+    if re.search(r"(?<![<>=!])=(?![=])", expr):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_().,'\"+\-*/%<>=!&| \t]+", expr):
+        return False
+
+    has_roll = "Roll(" in expr
+    has_numeric_or_bool = bool(re.search(r"\d", expr) or re.search(r"(True|False|and|or|not)\b", expr))
+    has_operator = bool(re.search(r"[+\-*/%]|<=|>=|==|!=|<|>", expr))
+    if re.fullmatch(r"Roll\(\s*['\"]\d+d\d+['\"]\s*\)", expr):
+        return True
+    if re.fullmatch(r"\d+(\.\d+)?", expr):
+        return True
+    return (has_roll or has_numeric_or_bool) and has_operator

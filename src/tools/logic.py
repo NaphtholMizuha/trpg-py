@@ -1,13 +1,12 @@
 """
-LogicEngine - 表达式求值引擎
-支持掷骰函数和状态引用
+LogicEngine - 极简表达式求值引擎
+仅支持掷骰函数 Roll('XdY') 和简单数值运算
 """
 
 import re
 import random
 import threading
-from dataclasses import dataclass
-from types import SimpleNamespace
+from dataclasses import dataclass, field
 from typing import Any
 from asteval import Interpreter
 
@@ -22,17 +21,25 @@ class DiceRecord:
 
 @dataclass
 class EvalResult:
-    """评估结果"""
+    """评估结果 - 兼容 LogicResult 接口"""
     result: Any
     resolved: str  # 详细的轨迹：包含数值来源和掷骰拆解
+    success: bool = True  # 执行是否成功
+    resolved_paths: dict = None  # 兼容性字段
+    trace: list = None  # 兼容性字段
+
+    def __post_init__(self):
+        if self.resolved_paths is None:
+            self.resolved_paths = {}
+        if self.trace is None:
+            self.trace = [self.resolved] if self.resolved else []
 
 
 class LogicEngine:
-    """逻辑表达式求值引擎"""
+    """极简逻辑表达式求值引擎 - 仅支持掷骰和数值运算"""
 
     # 正则表达式
     DICE_FUNC_REGEX = re.compile(r'(?i)Roll\(["\']([^"\']*)["\']\)')
-    IDENT_REGEX = re.compile(r'[a-zA-Z_][a-zA-Z0-9._]*')
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -41,13 +48,12 @@ class LogicEngine:
         # 缓存基础符号表（内置函数）
         self._base_symtable: dict[str, Any] | None = None
 
-    def eval(self, expression: str, state: dict[str, Any]) -> EvalResult:
+    def eval(self, expression: str) -> EvalResult:
         """
         核心入口：执行表达式
 
         Args:
-            expression: 表达式字符串
-            state: 状态字典
+            expression: 表达式字符串，如 "Roll('1d20') + 5 >= 15"
 
         Returns:
             EvalResult: 包含结果和解析轨迹
@@ -55,8 +61,8 @@ class LogicEngine:
         with self._lock:
             self._dice_records = []  # 重置记录
 
-            # 构建 interpreter
-            interpreter = self._build_interpreter(state)
+            # 构建 interpreter - 无上下文注入
+            interpreter = self._build_interpreter()
 
             # 执行表达式
             result = interpreter(expression)
@@ -67,12 +73,12 @@ class LogicEngine:
                 raise ValueError(f"执行错误: {err.get_error()}")
 
             # 生成包含详细解释的轨迹
-            resolved = self._generate_verbose_trace(expression, state)
+            resolved = self._generate_verbose_trace(expression)
 
             return EvalResult(result=result, resolved=resolved)
 
-    def _build_interpreter(self, state: dict[str, Any]) -> Interpreter:
-        """构建 asteval 解释器，注入状态和自定义函数"""
+    def _build_interpreter(self) -> Interpreter:
+        """构建 asteval 解释器，仅注入 Roll 函数"""
         # 首次调用时缓存基础符号表
         if self._base_symtable is None:
             base = Interpreter()
@@ -80,10 +86,6 @@ class LogicEngine:
 
         # 从基础符号表复制，避免重复创建内置函数
         symtable = dict(self._base_symtable)
-
-        # 转换嵌套字典为 SimpleNamespace，支持 player.ac 语法
-        converted = self._convert_to_namespace(state)
-        symtable.update(converted)
 
         # 注入 Roll 函数
         def roll_func(formula: str) -> int:
@@ -94,23 +96,6 @@ class LogicEngine:
         symtable['Roll'] = roll_func
 
         return Interpreter(symtable=symtable)
-
-    @staticmethod
-    def _convert_to_namespace(d: dict[str, Any]) -> dict[str, Any]:
-        """
-        递归转换嵌套字典为 SimpleNamespace
-        支持属性访问语法: player.ac
-        """
-        result = {}
-        for k, v in d.items():
-            if isinstance(v, dict):
-                result[k] = LogicEngine._convert_to_namespace(v)
-                # 如果结果只有字典，包装为 SimpleNamespace
-                if isinstance(result[k], dict):
-                    result[k] = SimpleNamespace(**result[k])
-            else:
-                result[k] = v
-        return result
 
     def _physical_roll(self, formula: str) -> DiceRecord:
         """
@@ -143,12 +128,11 @@ class LogicEngine:
             total=total
         )
 
-    def _generate_verbose_trace(self, expr_str: str, state: dict[str, Any]) -> str:
+    def _generate_verbose_trace(self, expr_str: str) -> str:
         """
         生成详细轨迹
         格式: 14 [3d20 = 10 + 2 + 2 = 14]
         """
-        # 1. 先替换掷骰函数
         idx = 0
         def replace_dice(match: re.Match) -> str:
             nonlocal idx
@@ -158,50 +142,4 @@ class LogicEngine:
                 return f"{rec.total} [{rec.formula} = {rec.breakdown} = {rec.total}]"
             return match.group(0)
 
-        res_str = self.DICE_FUNC_REGEX.sub(replace_dice, expr_str)
-
-        # 2. 再替换路径标识符
-        def replace_ident(match: re.Match) -> str:
-            m = match.group(0)
-            if m == 'Roll' or self._is_numeric(m):
-                return m
-
-            val = self._get_deep(state, m)
-            if val is not None and self._is_simple_value(val):
-                return f"{val} [{m}]"
-            return m
-
-        res_str = self.IDENT_REGEX.sub(replace_ident, res_str)
-        return res_str
-
-    @staticmethod
-    def _is_numeric(s: str) -> bool:
-        """检查字符串是否为数字"""
-        try:
-            float(s)
-            return True
-        except ValueError:
-            return False
-
-    @staticmethod
-    def _is_simple_value(v: Any) -> bool:
-        """检查值是否为简单类型（可用于显示）"""
-        return isinstance(v, (int, float, bool))
-
-    @staticmethod
-    def _get_deep(data: dict[str, Any], path: str) -> Any:
-        """
-        深度获取嵌套字典中的值
-
-        Args:
-            data: 数据字典
-            path: 点分隔的路径，如 "entities.player.ac"
-        """
-        keys = path.split('.')
-        current = data
-        for key in keys:
-            if isinstance(current, dict) and key in current:
-                current = current[key]
-            else:
-                return None
-        return current
+        return self.DICE_FUNC_REGEX.sub(replace_dice, expr_str)

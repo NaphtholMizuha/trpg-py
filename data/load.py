@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -14,6 +15,7 @@ from qdrant_client.models import (
 )
 
 from src.tools import Retriever
+from data.chunk_strategies import detect_and_chunk, chunk_by_monster_cards, chunk_by_header_level
 
 # ============================================
 # 1. 全局配置
@@ -24,6 +26,7 @@ COLLECTION_NAME = "dnd_5e_srd_hybrid"
 VECTOR_SIZE = 1024
 
 DATA_DIR = Path(__file__).parent / "dnd-5e-srd-markdown"
+CONVERTED_DIR = Path(__file__).parent / "converted_markdown"
 EXCLUDED_FILES = {"README.md", "CHANGELOG.md", "CONTRIBUTING.md", ""}
 BATCH_SIZE = 10
 
@@ -254,33 +257,106 @@ def upsert_chunks(client: QdrantClient, chunks: list[dict], dense_embeddings: li
 # ============================================
 # 5. 数据入库主流程
 # ============================================
-def get_content_type(filename: str) -> str:
+def get_content_type(filename: str, relative_path: str = "") -> str:
+    """获取内容类型，支持中英文路径"""
     type_map = {
         "spells": "spell", "monsters": "monster", "classes": "class",
         "equipment": "equipment", "magic-items": "magic_item", "feats": "feat",
-        "character-creation": "character", "playing-the-game": "rules"
+        "character-creation": "character", "playing-the-game": "rules",
+        "animals": "creature", "character-origins": "origin",
+        "gameplay-toolbox": "rules", "rules-glossary": "glossary",
     }
+
+    # 中文路径映射
+    chinese_type_map = {
+        "玩家手册2024": "phb2024",
+        "城主指南2024": "dmg2024",
+        "怪物图鉴2025": "mm2025",
+    }
+
+    # 检查是否在中文路径中
+    for cn_name, type_prefix in chinese_type_map.items():
+        if cn_name in relative_path or cn_name in filename:
+            return type_prefix
+
     return type_map.get(filename.replace(".md", ""), "general")
 
 
-def load_all_documents() -> None:
+def load_all_documents(
+    include_srd: bool = True,
+    include_converted: bool = True,
+    converted_book_filter: Optional[list[str]] = None,
+) -> None:
+    """加载所有文档到 Qdrant
+
+    Args:
+        include_srd: 是否包含原始 SRD Markdown 文件
+        include_converted: 是否包含转换后的不全书 Markdown
+        converted_book_filter: 可选，指定要加载的书籍列表
+    """
     # 使用 Retriever 获取嵌入功能
     retriever = Retriever(qdrant_url=QDRANT_URL, collection_name=COLLECTION_NAME)
 
     create_collection(retriever.qdrant_client)
 
-    md_files = [f for f in sorted(DATA_DIR.glob("*.md")) if f.name not in EXCLUDED_FILES]
+    all_md_files: list[tuple[Path, str]] = []  # (file_path, relative_dir)
+
+    # 收集 SRD 文件
+    if include_srd and DATA_DIR.exists():
+        srd_files = [
+            (f, "srd")
+            for f in DATA_DIR.glob("*.md")
+            if f.name not in EXCLUDED_FILES
+        ]
+        all_md_files.extend(srd_files)
+        print(f"发现 {len(srd_files)} 个 SRD 文件")
+
+    # 收集转换后的文件
+    if include_converted and CONVERTED_DIR.exists():
+        converted_files = []
+        for md_file in CONVERTED_DIR.rglob("*.md"):
+            # 获取相对路径用于类型判断
+            try:
+                rel_path = str(md_file.relative_to(CONVERTED_DIR))
+            except ValueError:
+                rel_path = md_file.name
+
+            # 检查书籍过滤器
+            if converted_book_filter:
+                if not any(book in rel_path for book in converted_book_filter):
+                    continue
+
+            converted_files.append((md_file, rel_path))
+
+        all_md_files.extend(converted_files)
+        print(f"发现 {len(converted_files)} 个转换后的文件")
+
+    if not all_md_files:
+        print("没有找到任何 Markdown 文件！")
+        return
+
     total_chunks = 0
 
-    for md_file in md_files:
+    for md_file, rel_dir in all_md_files:
         print(f"入库中: {md_file.name}...")
-        chunks = parse_markdown_by_headers(md_file)
+
+        # 根据文件类型选择分块策略
+        if rel_dir == "srd":
+            # SRD 文件使用传统标题分块
+            chunks = parse_markdown_by_headers(md_file)
+        else:
+            # 转换后的不全书使用智能检测分块
+            chunks = detect_and_chunk(md_file)
+
         if not chunks:
             continue
 
-        content_type = get_content_type(md_file.name)
+        content_type = get_content_type(md_file.name, rel_dir)
+        source_tag = "srd" if rel_dir == "srd" else "不全书"
+
         for chunk in chunks:
             chunk["metadata"]["type"] = content_type
+            chunk["metadata"]["source"] = source_tag
 
         for i in range(0, len(chunks), BATCH_SIZE):
             batch = chunks[i : i + BATCH_SIZE]
