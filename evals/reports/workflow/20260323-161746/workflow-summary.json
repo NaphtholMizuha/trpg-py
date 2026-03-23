@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-03-23T08:29:06.494348Z",
+  "provider": "lingya",
+  "model": "gpt-4o-mini",
+  "repeats": 5,
+  "report": {
+    "case_type": "workflow",
+    "total_cases": 15,
+    "passed_cases": 5,
+    "failed_cases": 10,
+    "pass_rate": 0.3333333333333333
+  },
+  "signal_breakdown": {
+    "no_task": {
+      "count": 0,
+      "rate": 0.0
+    },
+    "no_execution": {
+      "count": 0,
+      "rate": 0.0
+    },
+    "execution_issue": {
+      "count": 4,
+      "rate": 0.4
+    },
+    "state_mismatch": {
+      "count": 10,
+      "rate": 1.0
+    }
+  },
+  "case_stability": {
+    "workflow_healing_spell_basic": {
+      "runs": 5,
+      "passed_runs": 2,
+      "failed_runs": 3,
+      "pass_rate": 0.4
+    },
+    "workflow_magic_missile_shield_counterspell": {
+      "runs": 5,
+      "passed_runs": 0,
+      "failed_runs": 5,
+      "pass_rate": 0.0
+    },
+    "workflow_weapon_attack_hit": {
+      "runs": 5,
+      "passed_runs": 3,
+      "failed_runs": 2,
+      "pass_rate": 0.6
+    }
+  }
+}

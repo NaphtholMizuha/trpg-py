@@ -204,7 +204,10 @@ def _collect_failure_signals(result) -> set[str]:
     workflow = result.artifacts.get("workflow", {})
     tasks = workflow.get("tasks", [])
     executions = workflow.get("executions", [])
-    failure_codes = {failure.get("code") for failure in result.failures}
+    failure_codes = {
+        failure.code if hasattr(failure, "code") else failure.get("code")
+        for failure in result.failures
+    }
     signals: set[str] = set()
 
     if not tasks:
