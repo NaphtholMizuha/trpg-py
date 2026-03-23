@@ -1,0 +1,59 @@
+{
+  "case_id": "workflow_healing_spell_basic",
+  "user_input": "艾尔德拉对自己施放回复术，恢复生命值。",
+  "world_state_path": "evals/fixtures/world_states/aldera_injured.txt",
+  "interrupt_script": [
+    {
+      "type": "task_approval",
+      "resume": {
+        "action": "approve"
+      }
+    },
+    {
+      "type": "resolution_window_review",
+      "resume": {
+        "action": "close_window"
+      }
+    }
+  ],
+  "expect": {
+    "expected_field_behaviors": {
+      "Aldera.combat.HP": "increased"
+    },
+    "task_sequence": [
+      {
+        "description_contains": "回复",
+        "actor": "Aldera",
+        "target": "Aldera",
+        "must_include_write_targets": [
+          "Aldera.combat.HP"
+        ]
+      }
+    ],
+    "execution_sequence": [
+      {
+        "description_contains": "回复",
+        "must_touch_paths": [
+          "Aldera.combat.HP"
+        ],
+        "allow_narration_only": false
+      }
+    ],
+    "window_sequence": [
+      {
+        "root_description_contains": "回复",
+        "min_run_count": 1
+      }
+    ],
+    "interrupt_sequence": [
+      "task_approval",
+      "resolution_window_review"
+    ],
+    "must_finish": true,
+    "must_clear_active_window": true
+  },
+  "tags": [
+    "workflow",
+    "healing"
+  ]
+}

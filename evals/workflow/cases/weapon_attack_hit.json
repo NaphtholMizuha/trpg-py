@@ -1,0 +1,58 @@
+{
+  "case_id": "workflow_weapon_attack_hit",
+  "user_input": "艾尔德拉用长剑攻击哥布林，请结算这次命中的伤害。",
+  "interrupt_script": [
+    {
+      "type": "task_approval",
+      "resume": {
+        "action": "approve"
+      }
+    },
+    {
+      "type": "resolution_window_review",
+      "resume": {
+        "action": "close_window"
+      }
+    }
+  ],
+  "expect": {
+    "expected_field_behaviors": {
+      "Goblin.combat.HP": "decreased"
+    },
+    "task_sequence": [
+      {
+        "description_contains": "长剑",
+        "actor": "Aldera",
+        "target": "Goblin",
+        "must_include_write_targets": [
+          "Goblin.combat.HP"
+        ]
+      }
+    ],
+    "execution_sequence": [
+      {
+        "description_contains": "长剑",
+        "must_touch_paths": [
+          "Goblin.combat.HP"
+        ],
+        "allow_narration_only": false
+      }
+    ],
+    "window_sequence": [
+      {
+        "root_description_contains": "长剑",
+        "min_run_count": 1
+      }
+    ],
+    "interrupt_sequence": [
+      "task_approval",
+      "resolution_window_review"
+    ],
+    "must_finish": true,
+    "must_clear_active_window": true
+  },
+  "tags": [
+    "workflow",
+    "weapon"
+  ]
+}

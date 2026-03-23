@@ -132,7 +132,79 @@ class DeepPlannerAgent(BaseAgent):
             for field in inferred_fields:
                 self._append_unique(normalized_targets, seen, f"{path}.{field}")
 
+        self._augment_resource_write_targets(task, context_key_set, normalized_targets, seen)
         return normalized_targets
+
+    def _augment_resource_write_targets(
+        self,
+        task: TaskExecution,
+        context_key_set: set[str],
+        normalized_targets: list[str],
+        seen: set[str],
+    ) -> None:
+        actor = (task.actor or "").strip()
+        if not actor:
+            return
+
+        spell_slot_root = f"{actor}.spell_slots"
+        if spell_slot_root not in context_key_set:
+            return
+
+        if any(target.startswith(f"{spell_slot_root}.") for target in normalized_targets):
+            return
+
+        if not self._task_likely_consumes_spell_slots(task):
+            return
+
+        for field in self._infer_spell_slot_fields(task, spell_slot_root):
+            self._append_unique(normalized_targets, seen, f"{spell_slot_root}.{field}")
+
+    def _task_likely_consumes_spell_slots(self, task: TaskExecution) -> bool:
+        text = "\n".join(
+            blob
+            for blob in (
+                task.description,
+                task.context,
+                *task.execution_steps,
+                *task.raw_query_appendix,
+            )
+            if blob
+        )
+        keywords = (
+            "施放",
+            "施法",
+            "法术",
+            "法术位",
+            "spell",
+            "cast",
+        )
+        return (
+            (task.action_type or "").lower() == "spell"
+            or any(keyword in text for keyword in keywords)
+        )
+
+    def _infer_spell_slot_fields(self, task: TaskExecution, root_key: str) -> list[str]:
+        available_fields = [
+            field
+            for field in self._extract_kv_fields(task.context, root_key)
+            if re.fullmatch(r"\d+环", field)
+        ]
+        if not available_fields:
+            return []
+
+        focused_text = "\n".join(
+            blob
+            for blob in (
+                task.description,
+                *task.execution_steps,
+                *task.raw_query_appendix,
+            )
+            if blob
+        )
+        mentioned = self._extract_ordered_mentions(focused_text, available_fields)
+        if mentioned:
+            return mentioned[:1]
+        return available_fields[:1]
 
     def _infer_fields_for_root(self, task: TaskExecution, root_key: str) -> list[str]:
         available_fields = self._extract_kv_fields(task.context, root_key)

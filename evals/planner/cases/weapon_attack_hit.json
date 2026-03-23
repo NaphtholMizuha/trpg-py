@@ -1,0 +1,16 @@
+{
+  "case_id": "planner_weapon_attack_hit",
+  "input": "马利克用长剑攻击哥布林",
+  "expect": {
+    "actor": "Malik",
+    "target": "Goblin",
+    "must_include_write_targets": [
+      "Goblin.combat.HP"
+    ],
+    "must_not_require_dm_confirmation": false
+  },
+  "tags": [
+    "combat",
+    "weapon"
+  ]
+}

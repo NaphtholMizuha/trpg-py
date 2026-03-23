@@ -1,0 +1,79 @@
+{
+  "case_id": "resolver_healing_spell_apply",
+  "window": {
+    "window_id": "window_eval_005",
+    "root_task_id": "task_healing_spell",
+    "root_description": "艾尔德拉对自己施放治疗伤口",
+    "status": "ready",
+    "shared_context": [
+      "[KV Aldera.spell_slots] 1环: 4/4 | 2环: 3/3",
+      "[KV Aldera.combat] HP: 12/20 | AC: 18"
+    ],
+    "state_snapshot": {
+      "Aldera.spell_slots": "1环: 4/4 | 2环: 3/3",
+      "Aldera.combat": "HP: 12/20 | AC: 18"
+    },
+    "runs": [
+      {
+        "order": 0,
+        "priority": 10,
+        "task_id": "task_healing_spell",
+        "description": "艾尔德拉对自己施放治疗伤口",
+        "actor": "Aldera",
+        "target": "Aldera",
+        "narration": "艾尔德拉恢复 7 点生命值，并消耗一个 1 环法术位。",
+        "state_snapshot": {},
+        "resource_costs": [
+          {
+            "path": "Aldera.spell_slots.1环",
+            "old_value": "4/4",
+            "new_value": "3/4",
+            "operation": "MOD",
+            "source": "task_healing_spell"
+          }
+        ],
+        "primary_effects": [
+          {
+            "path": "Aldera.combat.HP",
+            "old_value": "12/20",
+            "new_value": "19/20",
+            "operation": "MOD",
+            "source": "task_healing_spell"
+          }
+        ],
+        "contingent_effects": [],
+        "field_changes": [
+          {
+            "path": "Aldera.spell_slots.1环",
+            "old_value": "4/4",
+            "new_value": "3/4",
+            "operation": "MOD",
+            "source": "task_healing_spell"
+          },
+          {
+            "path": "Aldera.combat.HP",
+            "old_value": "12/20",
+            "new_value": "19/20",
+            "operation": "MOD",
+            "source": "task_healing_spell"
+          }
+        ],
+        "triggered_chains": []
+      }
+    ]
+  },
+  "expect": {
+    "final_paths": [],
+    "discarded_paths": [],
+    "expected_final_values": {
+      "Aldera.spell_slots.1环": "3/4",
+      "Aldera.combat.HP": "19/20"
+    },
+    "must_not_emit_unknown_paths": true
+  },
+  "tags": [
+    "resolver",
+    "healing",
+    "spell"
+  ]
+}

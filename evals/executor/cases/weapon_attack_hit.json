@@ -1,0 +1,34 @@
+{
+  "case_id": "executor_weapon_attack_hit",
+  "task": {
+    "task_id": "task_weapon_attack_hit",
+    "description": "马利克用长剑命中哥布林",
+    "context": "【可写状态】[KV Malik.combat] HP: 20/20 | 攻击加值: +5 | 武器: 长剑 (1d8+3挥砍)\n【可写状态】[KV Goblin.combat] HP: 10/10 | AC: 13\n【规则】长剑命中后造成 1d8+3 挥砍伤害。",
+    "action_type": "攻击",
+    "raw_query_appendix": [],
+    "execution_steps": [
+      "结算长剑伤害",
+      "从哥布林 HP 中扣除伤害"
+    ],
+    "write_targets": [
+      "Goblin.combat.HP"
+    ],
+    "actor": "Malik",
+    "target": "Goblin",
+    "source": "dm",
+    "dm_notes": "本次攻击已经命中。",
+    "task_category": "normal"
+  },
+  "expect": {
+    "success": true,
+    "must_touch_paths": [
+      "Goblin.combat.HP"
+    ],
+    "must_not_touch_unknown_keys": true,
+    "allow_narration_only": false
+  },
+  "tags": [
+    "combat",
+    "weapon"
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "case_id": "resolver_path_conflict_overwrite",
+  "window": {
+    "window_id": "window_eval_001",
+    "root_task_id": "task_magic_missile",
+    "root_description": "马利克对艾尔德拉施放魔法飞弹",
+    "status": "ready",
+    "shared_context": [
+      "[KV Aldera.combat] HP: 44/44 | AC: 18",
+      "[KV Malik.spell_slots] 1环: 4/4"
+    ],
+    "state_snapshot": {
+      "Aldera.combat": "HP: 44/44 | AC: 18",
+      "Malik.spell_slots": "1环: 4/4"
+    },
+    "runs": [
+      {
+        "order": 0,
+        "priority": 10,
+        "task_id": "task_magic_missile",
+        "description": "马利克对艾尔德拉施放魔法飞弹",
+        "actor": "Malik",
+        "target": "Aldera",
+        "narration": "魔法飞弹将造成伤害。",
+        "state_snapshot": {},
+        "resource_costs": [],
+        "primary_effects": [
+          {
+            "path": "Aldera.combat.HP",
+            "old_value": "44/44",
+            "new_value": "35/44",
+            "operation": "MOD",
+            "source": "task_magic_missile"
+          }
+        ],
+        "contingent_effects": [],
+        "field_changes": [
+          {
+            "path": "Aldera.combat.HP",
+            "old_value": "44/44",
+            "new_value": "35/44",
+            "operation": "MOD",
+            "source": "task_magic_missile"
+          }
+        ],
+        "triggered_chains": []
+      },
+      {
+        "order": 1,
+        "priority": 5,
+        "task_id": "task_shield",
+        "description": "艾尔德拉施放护盾术",
+        "actor": "Aldera",
+        "target": "Aldera",
+        "narration": "护盾术使魔法飞弹伤害无效。",
+        "state_snapshot": {},
+        "resource_costs": [],
+        "primary_effects": [
+          {
+            "path": "Aldera.combat.HP",
+            "old_value": "35/44",
+            "new_value": "44/44",
+            "operation": "MOD",
+            "source": "task_shield"
+          }
+        ],
+        "contingent_effects": [],
+        "field_changes": [
+          {
+            "path": "Aldera.combat.HP",
+            "old_value": "35/44",
+            "new_value": "44/44",
+            "operation": "MOD",
+            "source": "task_shield"
+          }
+        ],
+        "triggered_chains": []
+      }
+    ]
+  },
+  "expect": {
+    "final_paths": [],
+    "discarded_paths": [],
+    "expected_final_values": {
+      "Aldera.combat.HP": "44/44"
+    },
+    "must_not_emit_unknown_paths": true
+  },
+  "tags": [
+    "resolver",
+    "conflict"
+  ]
+}

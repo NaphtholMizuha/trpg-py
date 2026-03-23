@@ -146,6 +146,30 @@ def test_planner_normalizes_actor_target_from_kv_context():
     assert normalized.target == "Aldera"
 
 
+def test_planner_backfills_actor_spell_slot_write_target_for_spell_tasks():
+    agent = object.__new__(DeepPlannerAgent)
+    task = TaskExecution(
+        task_id="task_demo",
+        description="马利克对艾尔德拉施放魔法飞弹",
+        context=(
+            "【可写状态】[KV Malik.spell_slots] 1环: 4/4 | 2环: 3/3 | 3环: 2/2\n"
+            "【可写状态】[KV Aldera.combat] HP: 44/44 | AC: 18\n"
+        ),
+        action_type="spell",
+        execution_steps=["进行伤害掷骰", "更新艾尔德拉的 HP"],
+        write_targets=["Aldera.combat.HP"],
+        actor="Malik",
+        target="Aldera",
+        source="dm",
+        task_category="normal",
+    )
+
+    normalized = agent._normalize_task(task)
+
+    assert "Malik.spell_slots.1环" in normalized.write_targets
+    assert "Aldera.combat.HP" in normalized.write_targets
+
+
 def test_resolution_window_normalizes_loose_json_shapes():
     window = ResolutionWindow.model_validate(
         {
@@ -361,8 +385,173 @@ def test_resolver_sanitizes_unknown_paths_and_sets_resolver_metadata():
 
     sanitized = agent._sanitize_result(result, window)
 
-    assert sanitized.final_field_changes[0].source == "resolver:window_demo"
-    assert len(sanitized.final_field_changes) == 1
+    assert sanitized.final_field_changes == []
     assert sanitized.discarded_field_changes[0].discarded_by == "resolver:window_demo"
     assert sanitized.resolution_summary == "resolver 完成了当前结算窗口的合并裁决。"
     assert sanitized.dm_suggestions == ["请 DM 确认护盾术是否成功。"]
+
+
+def test_executor_backfills_missing_hp_change_even_when_resource_cost_exists():
+    agent = object.__new__(ExecutorAgent)
+    task = TaskExecution(
+        task_id="task_magic_missile",
+        description="马利克对艾尔德拉施放魔法飞弹",
+        context=(
+            "[KV Malik.spell_slots] 1环: 4/4\n"
+            "[KV Aldera.combat] HP: 44/44 | AC: 18\n"
+        ),
+        write_targets=["Malik.spell_slots.1环", "Aldera.combat.HP"],
+        actor="Malik",
+        target="Aldera",
+        source="dm",
+        task_category="normal",
+    )
+    result = ExecutionResult(
+        task_id="task_magic_missile",
+        success=True,
+        resource_costs=[
+            {
+                "path": "Malik.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "task_magic_missile",
+            }
+        ],
+        narration="马利克施放了魔法飞弹，造成了 11 点伤害。",
+    )
+
+    backfilled = agent._backfill_missing_changes(result, task)
+
+    assert any(change.path == "Aldera.combat.HP" for change in backfilled.field_changes)
+
+
+def test_executor_dedupes_changes_across_buckets():
+    agent = object.__new__(ExecutorAgent)
+    result = ExecutionResult(
+        task_id="task_demo",
+        success=True,
+        resource_costs=[
+            {
+                "path": "Malik.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "task_demo",
+            }
+        ],
+        primary_effects=[
+            {
+                "path": "Malik.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "task_demo",
+            }
+        ],
+    )
+
+    agent._dedupe_change_buckets(result)
+
+    assert len(result.field_changes) == 1
+    assert result.field_changes[0].path == "Malik.spell_slots.1环"
+
+
+def test_resolver_removes_final_change_when_same_path_is_discarded():
+    agent = object.__new__(ResolverAgent)
+    window = ResolutionWindow(
+        window_id="window_demo",
+        root_task_id="task_demo",
+        root_description="护盾术被法术反制",
+        shared_context=[],
+        runs=[
+            ResolutionWindowRun(
+                order=0,
+                priority=5,
+                task_id="task_demo",
+                description="艾尔德拉施放护盾术",
+                field_changes=[
+                    {
+                        "path": "Aldera.spell_slots.1环",
+                        "old_value": "4/4",
+                        "new_value": "3/4",
+                        "operation": "MOD",
+                        "source": "task_demo",
+                    }
+                ],
+            )
+        ],
+    )
+    result = ResolutionResult(
+        window_id="window_demo",
+        final_field_changes=[
+            {
+                "path": "Aldera.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "",
+            }
+        ],
+        discarded_field_changes=[
+            {
+                "path": "Aldera.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "task_demo",
+                "reason": "护盾术被法术反制。",
+            }
+        ],
+    )
+
+    sanitized = agent._sanitize_result(result, window)
+
+    assert sanitized.final_field_changes == []
+    assert len(sanitized.discarded_field_changes) == 1
+
+
+def test_resolver_promotes_cancelled_resource_costs_to_discarded():
+    agent = object.__new__(ResolverAgent)
+    window = ResolutionWindow(
+        window_id="window_demo",
+        root_task_id="task_shield",
+        root_description="护盾术被法术反制",
+        shared_context=[],
+        runs=[
+            ResolutionWindowRun(
+                order=0,
+                priority=5,
+                task_id="task_shield",
+                description="艾尔德拉施放护盾术",
+                field_changes=[
+                    {
+                        "path": "Aldera.spell_slots.1环",
+                        "old_value": "4/4",
+                        "new_value": "3/4",
+                        "operation": "MOD",
+                        "source": "task_shield",
+                    }
+                ],
+            )
+        ],
+    )
+    result = ResolutionResult(
+        window_id="window_demo",
+        final_resource_costs=[
+            {
+                "path": "Aldera.spell_slots.1环",
+                "old_value": "4/4",
+                "new_value": "3/4",
+                "operation": "MOD",
+                "source": "",
+            }
+        ],
+        resolution_summary="护盾术因法术反制而失效。",
+    )
+
+    sanitized = agent._sanitize_result(result, window)
+
+    assert sanitized.final_resource_costs == []
+    assert len(sanitized.discarded_resource_costs) == 1
+    assert sanitized.discarded_resource_costs[0].path == "Aldera.spell_slots.1环"

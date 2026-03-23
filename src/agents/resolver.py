@@ -136,6 +136,9 @@ class ResolverAgent(BaseAgent):
             *result.discarded_contingent_effects,
         ]
 
+        self._discard_conflicting_final_changes(result)
+        self._promote_cancelled_resource_costs_to_discarded(result, window)
+
         if not result.resolution_summary:
             result.resolution_summary = "resolver 完成了当前结算窗口的合并裁决。"
 
@@ -172,6 +175,92 @@ class ResolverAgent(BaseAgent):
                 change.reason = "被 resolver 判定为在当前结算窗口内不生效。"
             sanitized.append(change)
         return sanitized
+
+    def _discard_conflicting_final_changes(self, result: ResolutionResult) -> None:
+        discarded_paths = {change.path for change in result.discarded_field_changes if change.path}
+        if not discarded_paths:
+            return
+
+        result.final_resource_costs = [
+            change for change in result.final_resource_costs if change.path not in discarded_paths
+        ]
+        result.final_primary_effects = [
+            change for change in result.final_primary_effects if change.path not in discarded_paths
+        ]
+        result.final_contingent_effects = [
+            change for change in result.final_contingent_effects if change.path not in discarded_paths
+        ]
+        result.final_field_changes = [
+            *result.final_resource_costs,
+            *result.final_primary_effects,
+            *result.final_contingent_effects,
+        ]
+
+    def _promote_cancelled_resource_costs_to_discarded(
+        self,
+        result: ResolutionResult,
+        window: ResolutionWindow,
+    ) -> None:
+        if result.discarded_resource_costs or not result.final_resource_costs:
+            return
+        if not self._window_indicates_cancellation(window, result):
+            return
+
+        promoted: list[DiscardedStateChange] = []
+        for change in result.final_resource_costs:
+            promoted.append(
+                DiscardedStateChange(
+                    path=change.path,
+                    old_value=change.old_value,
+                    new_value=change.new_value,
+                    operation=change.operation,
+                    source=change.source,
+                    discarded_by=window.root_task_id or f"resolver:{window.window_id}",
+                    reason="窗口上下文表明该动作被取消，相关资源消耗不应生效。",
+                )
+            )
+
+        result.discarded_resource_costs = promoted
+        result.final_resource_costs = []
+        result.final_field_changes = [
+            *result.final_resource_costs,
+            *result.final_primary_effects,
+            *result.final_contingent_effects,
+        ]
+        result.discarded_field_changes = [
+            *result.discarded_resource_costs,
+            *result.discarded_primary_effects,
+            *result.discarded_contingent_effects,
+        ]
+
+    def _window_indicates_cancellation(
+        self,
+        window: ResolutionWindow,
+        result: ResolutionResult,
+    ) -> bool:
+        text = "\n".join(
+            item
+            for item in (
+                window.root_description,
+                result.resolution_summary,
+                *window.shared_context,
+                *(run.description for run in window.runs),
+                *(run.narration for run in window.runs),
+            )
+            if item
+        )
+        cancellation_keywords = (
+            "法术反制",
+            "被反制",
+            "取消",
+            "无效",
+            "未生效",
+            "失效",
+            "counterspell",
+            "cancelled",
+            "negated",
+        )
+        return any(keyword in text for keyword in cancellation_keywords)
 
     def _is_actionable_result(self, result: ResolutionResult) -> bool:
         return any(

@@ -1,0 +1,17 @@
+{
+  "case_id": "planner_magic_missile_basic",
+  "input": "马利克对艾尔德拉施放魔法飞弹",
+  "expect": {
+    "actor": "Malik",
+    "target": "Aldera",
+    "must_include_write_targets": [
+      "Aldera.combat.HP",
+      "Malik.spell_slots.1环"
+    ],
+    "must_not_require_dm_confirmation": false
+  },
+  "tags": [
+    "combat",
+    "spell"
+  ]
+}

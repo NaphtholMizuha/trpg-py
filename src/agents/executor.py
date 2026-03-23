@@ -113,6 +113,7 @@ class ExecutorAgent(BaseAgent):
         result.task_id = task.task_id
         result = self._sanitize_result(result, task)
         result = self._backfill_missing_changes(result, task)
+        self._dedupe_change_buckets(result)
         if not self._is_actionable_result(result):
             logger.warning("Executor 输出为空结果，将标记为 stalled", task_id=task.task_id)
             result.success = False
@@ -269,10 +270,13 @@ class ExecutorAgent(BaseAgent):
                     change.new_value = f"{max(int(change.new_value), 0)}/{slot_max}"
 
     def _backfill_missing_changes(self, result: ExecutionResult, task: TaskExecution) -> ExecutionResult:
-        if result.field_changes or not result.success or not task.write_targets:
+        if not result.success or not task.write_targets:
             return result
 
+        existing_paths = {change.path for change in result.field_changes}
         for target_path in task.write_targets:
+            if target_path in existing_paths:
+                continue
             if not target_path.endswith(".HP"):
                 continue
             current_hp = self._extract_old_field_value_from_context(task.context, target_path)
@@ -303,9 +307,33 @@ class ExecutorAgent(BaseAgent):
                     source=task.task_id,
                 )
             )
+            existing_paths.add(target_path)
 
         self._sync_result_change_buckets(result)
         return result
+
+    def _dedupe_change_buckets(self, result: ExecutionResult) -> None:
+        seen_keys: set[tuple[str, str | None, str | None, str]] = set()
+
+        def dedupe(changes: list[StateChange]) -> list[StateChange]:
+            deduped: list[StateChange] = []
+            for change in changes:
+                key = (
+                    change.path,
+                    change.old_value,
+                    change.new_value,
+                    change.operation.value,
+                )
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                deduped.append(change)
+            return deduped
+
+        result.resource_costs = dedupe(result.resource_costs)
+        result.primary_effects = dedupe(result.primary_effects)
+        result.contingent_effects = dedupe(result.contingent_effects)
+        self._sync_result_change_buckets(result)
 
     def run(self, task: TaskExecution) -> ExecutionResult:
         return self.execute(task)
