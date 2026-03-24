@@ -86,7 +86,11 @@ def execute_task(
     try:
         task = validate_task_document(document)
     except ValidationError as exc:
-        return ExecutionReport(task_id=document.get("task_id", "<invalid>"), status="validation_failed", error=str(exc))
+        return ExecutionReport(
+            task_id=document.get("task_id", "<invalid>"),
+            status="validation_failed",
+            error=str(exc),
+        )
 
     roller = roller or RandomDiceRoller()
     results: dict[str, Any] = {}
@@ -123,7 +127,14 @@ def execute_task(
             )
         except (ValidationError, ExecutionError, ValueError) as exc:
             step_reports.append(
-                StepReport(id=step.id, type=step.type, kind=step.kind, status="failed", error=str(exc))
+                StepReport(
+                    id=step.id,
+                    type=step.type,
+                    kind=step.kind,
+                    status="failed",
+                    error=str(exc),
+                    error_code=getattr(exc, "error_code", None),
+                )
             )
             return ExecutionReport(
                 task_id=task.task_id,
@@ -222,11 +233,11 @@ def _validate_step_semantics(
                 if "dice" in component and component["dice"] is not None:
                     parse_dice_spec(component["dice"])
 
-    if step_type == "select" and kind == "area":
-        if "shape" not in args or "origin" not in args:
-            raise ValidationError(f"Area select step {step_id!r} must define shape and origin")
     if step_type == "select":
         _validate_field_map(step_id, args)
+        _validate_targeting(step_id, kind, args)
+        if kind == "area" and ("shape" not in args or "origin" not in args):
+            raise ValidationError(f"Area select step {step_id!r} must define shape and origin")
     if step_type == "effect":
         _validate_path_like_args(step_id, args, ("effects_path", "effects_path_template"))
     if step_type == "resource" and "path" not in args:
@@ -249,6 +260,20 @@ def _validate_field_map(step_id: str, args: dict[str, Any]) -> None:
             raise ValidationError(
                 f"Step {step_id!r} field_map entry {logical_name!r} must map to a string path"
             )
+
+
+def _validate_targeting(step_id: str, kind: str, args: dict[str, Any]) -> None:
+    targeting = args.get("targeting")
+    if targeting is None:
+        return
+    if not isinstance(targeting, dict):
+        raise ValidationError(f"Step {step_id!r} targeting must be an object")
+    required_keys = {"source_position", "max_range", "range_metric"}
+    missing = sorted(key for key in required_keys if key not in targeting)
+    if missing:
+        raise ValidationError(f"Step {step_id!r} targeting is missing required keys: {missing!r}")
+    if kind not in {"target", "area"}:
+        raise ValidationError(f"Step {step_id!r} kind {kind!r} does not support targeting")
 
 
 def _validate_path_like_args(step_id: str, args: dict[str, Any], keys: tuple[str, ...]) -> None:

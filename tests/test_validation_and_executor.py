@@ -117,6 +117,54 @@ class ValidationAndExecutorTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_task_document(document)
 
+    def test_targeting_requires_required_keys(self) -> None:
+        document = {
+            "task_id": "bad_targeting",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "pick_target",
+                    "type": "select",
+                    "kind": "target",
+                    "args": {
+                        "source": "hero_1",
+                        "targeting": {
+                            "source_position": {"x": 0, "y": 0},
+                            "max_range": 5,
+                        },
+                    },
+                }
+            ],
+        }
+        with self.assertRaises(ValidationError):
+            validate_task_document(document)
+
+    def test_targeting_accepts_ref_based_source_position(self) -> None:
+        document = {
+            "task_id": "targeting_ref",
+            "version": 1,
+            "context": {"origin": {"x": 0, "y": 0}},
+            "steps": [
+                {
+                    "id": "pick_area",
+                    "type": "select",
+                    "kind": "area",
+                    "args": {
+                        "shape": "sphere",
+                        "origin": {"$ref": "context.origin"},
+                        "radius": 20,
+                        "targeting": {
+                            "source_position": {"$ref": "context.origin"},
+                            "max_range": 150,
+                            "range_metric": "euclidean",
+                        },
+                    },
+                }
+            ],
+        }
+        task = validate_task_document(document)
+        self.assertEqual("pick_area", task.steps[0].id)
+
 
 if __name__ == "__main__":
     unittest.main()

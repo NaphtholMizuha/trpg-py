@@ -16,6 +16,16 @@
       "args": {
         "source": {
           "$ref": "context.target_id"
+        },
+        "entity_pool": {
+          "$ref": "state.actors"
+        },
+        "targeting": {
+          "source_position": {
+            "$ref": "state.actors.goblin_1.position"
+          },
+          "max_range": 5,
+          "range_metric": "euclidean"
         }
       }
     },

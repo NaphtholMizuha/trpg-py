@@ -1,5 +1,5 @@
 {
-  "task_id": "fireball",
+  "task_id": "fireball_out_of_range",
   "version": 1,
   "policy": {
     "ruleset": "dnd5e-2014"
@@ -7,7 +7,7 @@
   "context": {
     "caster_id": "wizard_1",
     "origin": {
-      "x": 10,
+      "x": 170,
       "y": 12
     }
   },

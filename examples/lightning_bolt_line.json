@@ -39,6 +39,15 @@
       }
     },
     {
+      "id": "spend_slot",
+      "type": "resource",
+      "kind": "consume",
+      "args": {
+        "path": "actors.wizard_line.resources.spell_slots.3",
+        "cost": 1
+      }
+    },
+    {
       "id": "dex_save",
       "type": "check",
       "kind": "save",

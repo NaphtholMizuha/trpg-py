@@ -45,6 +45,15 @@
       }
     },
     {
+      "id": "spend_slot",
+      "type": "resource",
+      "kind": "consume",
+      "args": {
+        "path": "combatants.wizard_custom.resources.spell_slots.3",
+        "cost": 1
+      }
+    },
+    {
       "id": "dex_save",
       "type": "check",
       "kind": "save",

@@ -60,6 +60,7 @@ def _build_healing_word_cap_state() -> dict[str, Any]:
                 "position": {"x": 2, "y": 2},
                 "hp": {"current": 12, "max": 12},
                 "effects": [],
+                "resources": {"spell_slots": {"1": 1}},
             },
             "patient_1": {
                 "id": "patient_1",
@@ -99,6 +100,7 @@ def _build_fireball_state() -> dict[str, Any]:
                 "spell_dc": 15,
                 "hp": {"current": 22},
                 "effects": [],
+                "resources": {"spell_slots": {"3": 1}},
             },
             "goblin_1": {
                 "id": "goblin_1",
@@ -131,6 +133,24 @@ def _build_fireball_state() -> dict[str, Any]:
     }
 
 
+def _build_far_goblin_attack_state() -> dict[str, Any]:
+    state = _build_goblin_attack_state()
+    state["actors"]["hero_1"]["position"] = {"x": 1, "y": 8}
+    return state
+
+
+def _build_fireball_empty_state() -> dict[str, Any]:
+    state = _build_fireball_state()
+    state["actors"]["goblin_1"]["position"] = {"x": 40, "y": 40}
+    state["actors"]["goblin_2"]["position"] = {"x": 45, "y": 42}
+    state["actors"]["ally_1"]["position"] = {"x": 42, "y": 41}
+    return state
+
+
+def _build_fireball_out_of_range_state() -> dict[str, Any]:
+    return _build_fireball_state()
+
+
 def _build_custom_layout_state() -> dict[str, Any]:
     return {
         "combatants": {
@@ -143,6 +163,7 @@ def _build_custom_layout_state() -> dict[str, Any]:
                 "numbers": {"magic": {"dc": 15}},
                 "tracks": {"health": {"value": 22}},
                 "status_lists": {"active_effects": []},
+                "resources": {"spell_slots": {"3": 1}},
             },
             "goblin_custom_1": {
                 "meta": {"id": "goblin_custom_1"},
@@ -189,6 +210,7 @@ def _build_lightning_bolt_state() -> dict[str, Any]:
                 "spell_dc": 15,
                 "hp": {"current": 22},
                 "effects": [],
+                "resources": {"spell_slots": {"3": 1}},
             },
             "goblin_line_1": {
                 "id": "goblin_line_1",
@@ -241,6 +263,7 @@ def _build_burning_hands_state() -> dict[str, Any]:
                 "spell_dc": 15,
                 "hp": {"current": 18},
                 "effects": [],
+                "resources": {"spell_slots": {"1": 1}},
             },
             "goblin_cone_1": {
                 "id": "goblin_cone_1",
@@ -279,6 +302,11 @@ DEMO_REGISTRY: dict[str, DemoDefinition] = {
         state_builder=_build_goblin_attack_state,
         roller_builder=_fixed_roller([15, 4]),
     ),
+    "goblin_scimitar_attack_out_of_range": DemoDefinition(
+        task_file="goblin_scimitar_attack",
+        state_builder=_build_far_goblin_attack_state,
+        roller_builder=_fixed_roller([15, 4]),
+    ),
     "goblin_scimitar_attack_crit": DemoDefinition(
         task_file="goblin_scimitar_attack",
         state_builder=_build_goblin_attack_state,
@@ -303,6 +331,16 @@ DEMO_REGISTRY: dict[str, DemoDefinition] = {
         task_file="fireball",
         state_builder=_build_fireball_state,
         roller_builder=_fixed_roller([12, 18, 3, 3, 3, 3, 2, 2, 1, 1]),
+    ),
+    "fireball_empty": DemoDefinition(
+        task_file="fireball_empty",
+        state_builder=_build_fireball_empty_state,
+        roller_builder=_fixed_roller([]),
+    ),
+    "fireball_out_of_range": DemoDefinition(
+        task_file="fireball_out_of_range",
+        state_builder=_build_fireball_out_of_range_state,
+        roller_builder=_fixed_roller([]),
     ),
     "lightning_bolt_line": DemoDefinition(
         task_file="lightning_bolt_line",
@@ -357,6 +395,18 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
+def format_roll_list(values: list[Any]) -> str:
+    return "[" + ", ".join(format_value(value) for value in values) + "]"
+
+
+def format_signed(value: Any) -> str:
+    number = float(value)
+    if number.is_integer():
+        integer = int(number)
+        return f"+{integer}" if integer >= 0 else str(integer)
+    return f"+{format_value(number)}" if number >= 0 else format_value(number)
+
+
 def summarize_step(step_report: dict[str, Any]) -> list[str]:
     outputs = step_report.get("outputs", {})
     step_type = step_report["type"]
@@ -364,6 +414,8 @@ def summarize_step(step_report: dict[str, Any]) -> list[str]:
     status = step_report["status"]
     lines = [f"- {step_report['id']} [{step_type}.{kind}] -> {status}"]
     if status != "success":
+        if step_report.get("error_code"):
+            lines.append(f"  reason: {step_report['error_code']}")
         if step_report.get("error"):
             lines.append(f"  error: {step_report['error']}")
         return lines
@@ -373,6 +425,7 @@ def summarize_step(step_report: dict[str, Any]) -> list[str]:
         lines.append(f"  targets: {', '.join(target_ids) if target_ids else '(none)'}")
     elif step_type == "check":
         target_results = outputs.get("target_results")
+        target_ids = outputs.get("target_ids", [])
         if target_results:
             for target_id, result in target_results.items():
                 lines.append(
@@ -380,31 +433,77 @@ def summarize_step(step_report: dict[str, Any]) -> list[str]:
                     + f"{target_id}: outcome={result.get('outcome')} total={result.get('total')}"
                     + f" natural={result.get('natural')} mode={result.get('roll_mode')}"
                 )
+                rolls = result.get("rolls", [])
+                if rolls:
+                    lines.append(f"    rolls: {format_roll_list(rolls)}")
+                lines.append(
+                    "    "
+                    + f"calc: {result.get('chosen')} {format_signed(result.get('modifier', 0))}"
+                    + f" = {result.get('total')}"
+                    + f" vs {result.get('threshold')}"
+                )
+        elif not target_ids:
+            lines.append("  no targets")
         else:
             lines.append(
                 "  "
                 + f"outcome={outputs.get('outcome')} total={outputs.get('total')}"
                 + f" natural={outputs.get('natural')} mode={outputs.get('roll_mode')}"
             )
+            rolls = outputs.get("rolls", [])
+            if rolls:
+                lines.append(f"    rolls: {format_roll_list(rolls)}")
+            lines.append(
+                "    "
+                + f"calc: {outputs.get('chosen')} {format_signed(outputs.get('modifier', 0))}"
+                + f" = {outputs.get('total')}"
+                + f" vs {outputs.get('threshold')}"
+            )
     elif step_type == "damage":
         per_target = outputs.get("per_target", {})
-        for target_id, result in per_target.items():
-            lines.append(
-                "  "
-                + f"{target_id}: amount={result.get('final_total')} multiplier={format_value(result.get('multiplier', 1))}"
-            )
+        if per_target:
+            for target_id, result in per_target.items():
+                lines.append(
+                    "  "
+                    + f"{target_id}: amount={result.get('final_total')} multiplier={format_value(result.get('multiplier', 1))}"
+                )
+                components = result.get("components", [])
+                for component in components:
+                    rolls = component.get("rolls", [])
+                    dice = component.get("dice")
+                    bonus = component.get("bonus", 0)
+                    component_total = component.get("total")
+                    calc = f"{format_roll_list(rolls)}"
+                    if bonus:
+                        calc += f" {format_signed(bonus)}"
+                    calc += f" = {component_total}"
+                    label = dice or "flat"
+                    damage_type = component.get("damage_type")
+                    if damage_type:
+                        label += f" {damage_type}"
+                    lines.append(f"    {label}: {calc}")
+                lines.append(
+                    "    "
+                    + f"final: floor({result.get('base_total')} * {format_value(result.get('multiplier', 1))})"
+                    + f" = {result.get('final_total')}"
+                )
+        else:
+            lines.append("  no targets")
     elif step_type == "heal":
         per_target = outputs.get("per_target", {})
-        for target_id, result in per_target.items():
-            summary = f"{target_id}: healed={result.get('final_total')}"
-            requested_total = result.get("requested_total")
-            if requested_total is not None and requested_total != result.get("final_total"):
-                summary += f" requested={requested_total}"
-            if result.get("max_hp") is not None:
-                summary += f" max_hp={result.get('max_hp')}"
-            if result.get("capped"):
-                summary += " capped=yes"
-            lines.append("  " + summary)
+        if per_target:
+            for target_id, result in per_target.items():
+                summary = f"{target_id}: healed={result.get('final_total')}"
+                requested_total = result.get("requested_total")
+                if requested_total is not None and requested_total != result.get("final_total"):
+                    summary += f" requested={requested_total}"
+                if result.get("max_hp") is not None:
+                    summary += f" max_hp={result.get('max_hp')}"
+                if result.get("capped"):
+                    summary += " capped=yes"
+                lines.append("  " + summary)
+        else:
+            lines.append("  no targets")
     elif step_type == "resource":
         lines.append(
             "  "

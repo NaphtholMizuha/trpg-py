@@ -20,6 +20,15 @@
       }
     },
     {
+      "id": "spend_slot",
+      "type": "resource",
+      "kind": "consume",
+      "args": {
+        "path": "actors.cleric_1.resources.spell_slots.1",
+        "cost": 1
+      }
+    },
+    {
       "id": "apply_heal",
       "type": "heal",
       "kind": "apply",

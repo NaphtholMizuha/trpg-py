@@ -21,6 +21,7 @@ def build_fireball_state() -> dict:
                 "spell_dc": 15,
                 "hp": {"current": 22},
                 "effects": [],
+                "resources": {"spell_slots": {"3": 1}},
             },
             "goblin_1": {
                 "id": "goblin_1",
@@ -65,6 +66,7 @@ def build_custom_layout_state() -> dict:
                 "numbers": {"magic": {"dc": 15}},
                 "tracks": {"health": {"value": 22}},
                 "status_lists": {"active_effects": []},
+                "resources": {"spell_slots": {"3": 1}},
             },
             "goblin_custom_1": {
                 "meta": {"id": "goblin_custom_1"},
@@ -111,6 +113,7 @@ def build_line_state() -> dict:
                 "spell_dc": 15,
                 "hp": {"current": 22},
                 "effects": [],
+                "resources": {"spell_slots": {"3": 1}},
             },
             "goblin_line_1": {
                 "id": "goblin_line_1",
@@ -163,6 +166,7 @@ def build_cone_state() -> dict:
                 "spell_dc": 15,
                 "hp": {"current": 18},
                 "effects": [],
+                "resources": {"spell_slots": {"1": 1}},
             },
             "goblin_cone_1": {
                 "id": "goblin_cone_1",
@@ -196,11 +200,95 @@ def build_cone_state() -> dict:
 
 
 class OperationTests(unittest.TestCase):
+    def test_select_target_succeeds_when_target_is_in_range(self) -> None:
+        document = json.loads((ROOT / "examples" / "goblin_scimitar_attack.json").read_text())
+        state = {
+            "actors": {
+                "goblin_1": {
+                    "id": "goblin_1",
+                    "side": "enemy",
+                    "alive": True,
+                    "position": {"x": 1, "y": 1},
+                    "hp": {"current": 7},
+                    "attacks": {"scimitar": {"to_hit": 4}},
+                },
+                "hero_1": {
+                    "id": "hero_1",
+                    "side": "player",
+                    "alive": True,
+                    "position": {"x": 1, "y": 2},
+                    "ac": 16,
+                    "hp": {"current": 20},
+                    "effects": [],
+                    "saves": {"dex": 2},
+                },
+            }
+        }
+        report = execute_task(document, state, roller=FixedDiceRoller([15, 4]))
+        self.assertEqual("success", report.status)
+        self.assertEqual(["hero_1"], report.results["pick_target"]["target_ids"])
+
+    def test_select_target_fails_when_target_is_out_of_range(self) -> None:
+        document = json.loads((ROOT / "examples" / "goblin_scimitar_attack.json").read_text())
+        state = {
+            "actors": {
+                "goblin_1": {
+                    "id": "goblin_1",
+                    "side": "enemy",
+                    "alive": True,
+                    "position": {"x": 1, "y": 1},
+                    "hp": {"current": 7},
+                    "attacks": {"scimitar": {"to_hit": 4}},
+                },
+                "hero_1": {
+                    "id": "hero_1",
+                    "side": "player",
+                    "alive": True,
+                    "position": {"x": 1, "y": 8},
+                    "ac": 16,
+                    "hp": {"current": 20},
+                    "effects": [],
+                    "saves": {"dex": 2},
+                },
+            }
+        }
+        report = execute_task(document, state, roller=FixedDiceRoller([15, 4]))
+        self.assertEqual("failed", report.status)
+        self.assertEqual("failed", report.step_reports[0].status)
+        self.assertEqual("target_out_of_range", report.step_reports[0].error_code)
+        self.assertIn("out of range", report.step_reports[0].error)
+
     def test_select_area_filters_enemy_targets(self) -> None:
         document = json.loads((ROOT / "examples" / "fireball.json").read_text())
         state = build_fireball_state()
         report = execute_task(document, state, roller=FixedDiceRoller([12, 18, 3, 3, 3, 3, 2, 2, 1, 1]))
         self.assertEqual(["goblin_1", "goblin_2"], report.results["select_targets"]["target_ids"])
+
+    def test_select_area_fails_when_origin_is_out_of_range(self) -> None:
+        document = json.loads((ROOT / "examples" / "fireball_out_of_range.json").read_text())
+        state = build_fireball_state()
+        report = execute_task(document, state, roller=FixedDiceRoller([]))
+        self.assertEqual("failed", report.status)
+        self.assertEqual("failed", report.step_reports[0].status)
+        self.assertEqual("target_out_of_range", report.step_reports[0].error_code)
+        self.assertIn("Area origin is out of range", report.step_reports[0].error)
+
+    def test_select_area_can_succeed_with_empty_targets(self) -> None:
+        document = json.loads((ROOT / "examples" / "fireball_empty.json").read_text())
+        state = build_fireball_state()
+        state["actors"]["goblin_1"]["position"] = {"x": 40, "y": 40}
+        state["actors"]["goblin_2"]["position"] = {"x": 45, "y": 42}
+        state["actors"]["ally_1"]["position"] = {"x": 42, "y": 41}
+        report = execute_task(document, state, roller=FixedDiceRoller([]))
+        self.assertEqual("success", report.status)
+        self.assertEqual([], report.results["select_targets"]["target_ids"])
+        self.assertEqual([], report.results["dex_save"]["target_ids"])
+        self.assertEqual({}, report.results["fire_damage"]["per_target"])
+        self.assertEqual(0, state["actors"]["wizard_1"]["resources"]["spell_slots"]["3"])
+        self.assertEqual(
+            "actors.wizard_1.resources.spell_slots.3",
+            report.applied_changes[0].path,
+        )
 
     def test_damage_halves_on_successful_save(self) -> None:
         document = json.loads((ROOT / "examples" / "fireball.json").read_text())

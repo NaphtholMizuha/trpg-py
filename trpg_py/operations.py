@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from trpg_py.dice import DiceRoller, parse_dice_spec
-from trpg_py.errors import ExecutionError, ValidationError
+from trpg_py.errors import ExecutionError, TargetingRangeError, ValidationError
 from trpg_py.models import ChangeInstruction, OperationResult, TaskDocument, TaskStep
 from trpg_py.state import get_path, has_path
 
@@ -69,6 +69,7 @@ def _run_select(step: TaskStep, args: dict[str, Any], state: dict[str, Any]) -> 
             target_ids = source
         else:
             target_ids = [source]
+        _validate_select_targeting(step, args, actors, target_ids)
         return OperationResult(
             outputs={
                 "target_ids": target_ids,
@@ -88,6 +89,7 @@ def _run_select(step: TaskStep, args: dict[str, Any], state: dict[str, Any]) -> 
     origin = args.get("origin")
     if origin is None:
         raise ExecutionError("select.area requires origin")
+    _validate_area_targeting(args, origin)
     shape = args.get("shape", "sphere")
     matched = []
     for actor in filtered:
@@ -119,7 +121,10 @@ def _run_check(
     if not isinstance(dice, str):
         raise ExecutionError("check step requires a dice string")
     parse_dice_spec(dice)
+    explicit_targets = "targets" in args
     target_ids = _resolve_target_ids(args)
+    if explicit_targets and not target_ids:
+        return OperationResult(outputs={"target_ids": [], "target_results": {}})
     if not target_ids and args.get("target_id") is not None:
         target_ids = [str(args["target_id"])]
     if step.kind == "attack" and len(target_ids) > 1:
@@ -211,6 +216,8 @@ def _run_damage(
     roller: DiceRoller,
 ) -> OperationResult:
     target_ids = _resolve_target_ids(args)
+    if not target_ids and "targets" in args:
+        return OperationResult(outputs={"target_ids": [], "is_critical": bool(args.get("is_critical", False)), "per_target": {}})
     if not target_ids:
         raise ExecutionError("damage.apply requires targets")
     components = args.get("damage")
@@ -267,6 +274,8 @@ def _run_damage(
 
 def _run_heal(args: dict[str, Any], state: dict[str, Any], roller: DiceRoller) -> OperationResult:
     target_ids = _resolve_target_ids(args)
+    if not target_ids and "targets" in args:
+        return OperationResult(outputs={"target_ids": [], "per_target": {}}, changes=[])
     if not target_ids:
         raise ExecutionError("heal.apply requires targets")
     amount = args.get("amount")
@@ -321,6 +330,8 @@ def _run_resource(args: dict[str, Any], state: dict[str, Any]) -> OperationResul
 
 def _run_effect(step: TaskStep, args: dict[str, Any], state: dict[str, Any]) -> OperationResult:
     target_ids = _resolve_target_ids(args)
+    if not target_ids and "targets" in args:
+        return OperationResult(outputs={"target_ids": []}, changes=[])
     if not target_ids:
         raise ExecutionError("effect step requires targets")
     changes: list[ChangeInstruction] = []
@@ -458,6 +469,81 @@ def _matches_shape(shape: str, origin: dict[str, Any], position: dict[str, Any],
     if shape == "target":
         return distance == 0
     raise ExecutionError(f"Unsupported area shape: {shape}")
+
+
+def _validate_select_targeting(
+    step: TaskStep,
+    args: dict[str, Any],
+    actors: list[dict[str, Any]],
+    target_ids: list[Any],
+) -> None:
+    targeting = args.get("targeting")
+    if targeting is None:
+        return
+    source_position = _coerce_position(
+        targeting.get("source_position"),
+        context=f"{step.id} targeting.source_position",
+    )
+    max_range = float(targeting.get("max_range"))
+    range_metric = str(targeting.get("range_metric"))
+    actor_by_id = {_resolve_actor_id(actor, args): actor for actor in actors}
+    for target_id in target_ids:
+        actor = actor_by_id.get(str(target_id))
+        if actor is None:
+            raise ExecutionError(f"Target {target_id!r} was not found in entity_pool for range validation")
+        target_position = _resolve_actor_position(actor, args)
+        if target_position is None:
+            raise ExecutionError(f"Target {target_id!r} is missing position fields required for range validation")
+        distance = _measure_distance(source_position, target_position, range_metric)
+        if distance > max_range:
+            raise TargetingRangeError(
+                f"Target {target_id!r} is out of range: distance={_format_number(distance)} > max_range={_format_number(max_range)}"
+            )
+
+
+def _validate_area_targeting(args: dict[str, Any], origin: Any) -> None:
+    targeting = args.get("targeting")
+    if targeting is None:
+        return
+    source_position = _coerce_position(
+        targeting.get("source_position"),
+        context="select.area targeting.source_position",
+    )
+    origin_position = _coerce_position(origin, context="select.area origin")
+    max_range = float(targeting.get("max_range"))
+    range_metric = str(targeting.get("range_metric"))
+    distance = _measure_distance(source_position, origin_position, range_metric)
+    if distance > max_range:
+        raise TargetingRangeError(
+            f"Area origin is out of range: distance={_format_number(distance)} > max_range={_format_number(max_range)}"
+        )
+
+
+def _coerce_position(value: Any, *, context: str) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ExecutionError(f"{context} must be an object with x and y")
+    if "x" not in value or "y" not in value:
+        raise ExecutionError(f"{context} must define both x and y")
+    return {"x": float(value["x"]), "y": float(value["y"])}
+
+
+def _measure_distance(
+    source_position: dict[str, float],
+    target_position: dict[str, float],
+    range_metric: str,
+) -> float:
+    if range_metric == "euclidean":
+        return math.dist(
+            (source_position["x"], source_position["y"]),
+            (target_position["x"], target_position["y"]),
+        )
+    raise ExecutionError(f"Unsupported range metric: {range_metric!r}")
+
+
+def _format_number(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 def _resolve_target_ids(args: dict[str, Any]) -> list[str]:

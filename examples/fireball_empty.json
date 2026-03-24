@@ -1,5 +1,5 @@
 {
-  "task_id": "fireball",
+  "task_id": "fireball_empty",
   "version": 1,
   "policy": {
     "ruleset": "dnd5e-2014"

@@ -39,6 +39,15 @@
       }
     },
     {
+      "id": "spend_slot",
+      "type": "resource",
+      "kind": "consume",
+      "args": {
+        "path": "actors.wizard_cone.resources.spell_slots.1",
+        "cost": 1
+      }
+    },
+    {
       "id": "dex_save",
       "type": "check",
       "kind": "save",

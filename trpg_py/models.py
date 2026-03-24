@@ -55,6 +55,7 @@ class StepReport:
     changes: list[AppliedChange] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    error_code: str | None = None
 
 
 @dataclass(slots=True)
