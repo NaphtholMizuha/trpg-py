@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from trpg_py.errors import ValidationError
-from trpg_py.state import get_path
+from trpg_py.store import read
 
 
 def collect_refs(value: Any) -> list[str]:
@@ -27,15 +27,15 @@ def resolve_reference(path: str, state: dict[str, Any], context: dict[str, Any],
     if namespace == "context":
         if not remainder:
             return context
-        return get_path(context, remainder)
+        return read(context, remainder)
     if namespace == "state":
         if not remainder:
             return state
-        return get_path(state, remainder)
+        return read(state, remainder)
     if namespace == "result":
         if not remainder:
             return results
-        return get_path(results, remainder)
+        return read(results, remainder)
     raise ValidationError(f"Unsupported reference namespace in {path!r}")
 
 

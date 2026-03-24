@@ -45,6 +45,14 @@ python -B -m unittest discover -s tests -v
 
 如果你在自己的代码中接入这套引擎，直接调用 Python API 即可。
 
+顶层导入只保留少量稳定入口，例如：
+
+```python
+from trpg_py import FixedDiceRoller, execute_task
+```
+
+如果你需要内部实现细节，请直接使用归属包路径，例如 `trpg_py.engine.core.refs`、`trpg_py.engine.combat.operations` 或 `trpg_py.store`。`trpg_py.dice`、`trpg_py.executor`、`trpg_py.operations`、`trpg_py.refs`、`trpg_py.models`、`trpg_py.state` 这些旧根目录模块不再保留。
+
 ## 最小可运行示例
 
 ```python

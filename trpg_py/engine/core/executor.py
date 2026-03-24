@@ -3,16 +3,14 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from trpg_py.engine.dice import DiceRoller, RandomDiceRoller, parse_dice_spec
-from trpg_py.engine.operations import (
+from trpg_py.engine.combat.operations import (
     SUPPORTED_CHECK_TAGS,
     SUPPORTED_KINDS,
     SUPPORTED_TYPES,
     dispatch_step,
 )
-from trpg_py.engine.state import get_path, has_path, set_path
-from trpg_py.errors import ExecutionError, ValidationError
-from trpg_py.models import (
+from trpg_py.engine.core.dice import DiceRoller, RandomDiceRoller, parse_dice_spec
+from trpg_py.engine.core.models import (
     AppliedChange,
     ExecutionReport,
     OperationResult,
@@ -20,7 +18,10 @@ from trpg_py.models import (
     TaskDocument,
     TaskStep,
 )
-from trpg_py.refs import collect_refs, resolve_value
+from trpg_py.engine.core.refs import collect_refs, resolve_value
+from trpg_py.errors import ExecutionError, ValidationError
+from trpg_py.store import read, write
+from trpg_py.store.compat import has_path
 
 
 ALLOWED_FIELD_MAP_KEYS = {"id", "side", "alive", "tags", "position.x", "position.y"}
@@ -162,8 +163,8 @@ def execute_task(
 def _commit_changes(state: dict[str, Any], op_result: OperationResult) -> list[AppliedChange]:
     applied: list[AppliedChange] = []
     for change in op_result.changes:
-        old_value = deepcopy(get_path(state, change.path)) if has_path(state, change.path) else None
-        set_path(state, change.path, change.value)
+        old_value = deepcopy(read(state, change.path)) if has_path(state, change.path) else None
+        write(state, change.path, change.value)
         applied.append(
             AppliedChange(
                 path=change.path,
@@ -260,25 +261,24 @@ def _validate_field_map(step_id: str, args: dict[str, Any]) -> None:
     invalid_keys = sorted(set(field_map) - ALLOWED_FIELD_MAP_KEYS)
     if invalid_keys:
         raise ValidationError(f"Step {step_id!r} field_map uses unsupported keys: {invalid_keys!r}")
-    for logical_name, path in field_map.items():
-        if not isinstance(path, str):
-            raise ValidationError(
-                f"Step {step_id!r} field_map entry {logical_name!r} must map to a string path"
-            )
 
 
 def _validate_targeting(step_id: str, kind: str, args: dict[str, Any]) -> None:
     targeting = args.get("targeting")
     if targeting is None:
         return
+    if kind not in {"target", "area"}:
+        raise ValidationError(f"Step {step_id!r} targeting is only supported for select.target/select.area")
     if not isinstance(targeting, dict):
         raise ValidationError(f"Step {step_id!r} targeting must be an object")
     required_keys = {"source_position", "max_range", "range_metric"}
-    missing = sorted(key for key in required_keys if key not in targeting)
-    if missing:
-        raise ValidationError(f"Step {step_id!r} targeting is missing required keys: {missing!r}")
-    if kind not in {"target", "area"}:
-        raise ValidationError(f"Step {step_id!r} kind {kind!r} does not support targeting")
+    missing_keys = [key for key in required_keys if key not in targeting]
+    if missing_keys:
+        raise ValidationError(f"Step {step_id!r} targeting is missing keys: {missing_keys!r}")
+    if not isinstance(targeting["max_range"], (int, float)):
+        raise ValidationError(f"Step {step_id!r} targeting.max_range must be numeric")
+    if not isinstance(targeting["range_metric"], str):
+        raise ValidationError(f"Step {step_id!r} targeting.range_metric must be a string")
 
 
 def _validate_path_like_args(step_id: str, args: dict[str, Any], keys: tuple[str, ...]) -> None:
@@ -286,11 +286,10 @@ def _validate_path_like_args(step_id: str, args: dict[str, Any], keys: tuple[str
         if key not in args:
             continue
         value = args[key]
-        if isinstance(value, str):
+        if key.endswith("_template"):
+            if not isinstance(value, str):
+                raise ValidationError(f"Step {step_id!r} {key!r} must be a string template")
             continue
-        if isinstance(value, dict):
-            if all(isinstance(item, str) for item in value.values()):
-                continue
-        raise ValidationError(
-            f"Step {step_id!r} argument {key!r} must be a string path or a mapping of target ids to string paths"
-        )
+        if isinstance(value, (str, dict)):
+            continue
+        raise ValidationError(f"Step {step_id!r} {key!r} must be a string or object mapping")
