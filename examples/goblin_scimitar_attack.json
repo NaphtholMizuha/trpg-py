@@ -1,0 +1,71 @@
+{
+  "task_id": "goblin_scimitar_attack",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "context": {
+    "actor_id": "goblin_1",
+    "target_id": "hero_1"
+  },
+  "steps": [
+    {
+      "id": "pick_target",
+      "type": "select",
+      "kind": "target",
+      "args": {
+        "source": {
+          "$ref": "context.target_id"
+        }
+      }
+    },
+    {
+      "id": "attack_roll",
+      "type": "check",
+      "kind": "attack",
+      "tags": [
+        "nat"
+      ],
+      "args": {
+        "dice": "1d20",
+        "modifier": {
+          "$ref": "state.actors.goblin_1.attacks.scimitar.to_hit"
+        },
+        "target_id": {
+          "$ref": "context.target_id"
+        },
+        "target_ac": {
+          "$ref": "state.actors.hero_1.ac"
+        }
+      }
+    },
+    {
+      "id": "apply_damage",
+      "type": "damage",
+      "kind": "apply",
+      "when": {
+        "$ref": "result.attack_roll.outcome",
+        "in": [
+          "success",
+          "crit_success"
+        ]
+      },
+      "args": {
+        "targets": {
+          "$ref": "result.pick_target.target_ids"
+        },
+        "damage": [
+          {
+            "dice": "1d6",
+            "bonus": 2,
+            "damage_type": "slashing"
+          }
+        ],
+        "is_critical": {
+          "$ref": "result.attack_roll.outcome",
+          "eq": "crit_success"
+        }
+      }
+    }
+  ]
+}

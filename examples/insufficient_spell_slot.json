@@ -1,0 +1,18 @@
+{
+  "task_id": "insufficient_spell_slot",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "steps": [
+    {
+      "id": "spend_slot",
+      "type": "resource",
+      "kind": "consume",
+      "args": {
+        "path": "actors.wizard_1.resources.spell_slots.1",
+        "cost": 1
+      }
+    }
+  ]
+}

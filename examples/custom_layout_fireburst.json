@@ -1,0 +1,103 @@
+{
+  "task_id": "custom_layout_fireburst",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "context": {
+    "caster_id": "wizard_custom",
+    "origin": {
+      "x": 10,
+      "y": 12
+    }
+  },
+  "steps": [
+    {
+      "id": "select_targets",
+      "type": "select",
+      "kind": "area",
+      "args": {
+        "entity_pool": {
+          "$ref": "state.combatants"
+        },
+        "field_map": {
+          "id": "meta.id",
+          "side": "team.side",
+          "alive": "status.alive",
+          "tags": "traits.tags",
+          "position.x": "space.grid.col",
+          "position.y": "space.grid.row"
+        },
+        "shape": "sphere",
+        "radius": 20,
+        "origin": {
+          "$ref": "context.origin"
+        },
+        "include_side": [
+          "enemy"
+        ],
+        "exclude_ids": [
+          {
+            "$ref": "context.caster_id"
+          }
+        ],
+        "must_be_alive": true
+      }
+    },
+    {
+      "id": "dex_save",
+      "type": "check",
+      "kind": "save",
+      "tags": [
+        "nat"
+      ],
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "dice": "1d20",
+        "ability": "dex",
+        "modifier_path_template": "combatants.{target_id}.numbers.saves.dexterity",
+        "dc_path": "combatants.wizard_custom.numbers.magic.dc"
+      }
+    },
+    {
+      "id": "fire_damage",
+      "type": "damage",
+      "kind": "apply",
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "damage": [
+          {
+            "dice": "8d6",
+            "bonus": 0,
+            "damage_type": "fire"
+          }
+        ],
+        "save_result": {
+          "$ref": "result.dex_save"
+        },
+        "on_save": "half",
+        "target_hp_path_template": "combatants.{target_id}.tracks.health.value"
+      }
+    },
+    {
+      "id": "add_burning",
+      "type": "effect",
+      "kind": "add",
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "effects_path_template": "combatants.{target_id}.status_lists.active_effects",
+        "effect": {
+          "id": "burning",
+          "source": "wizard_custom",
+          "duration_rounds": 1
+        }
+      }
+    }
+  ]
+}

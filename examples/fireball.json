@@ -1,0 +1,76 @@
+{
+  "task_id": "fireball",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "context": {
+    "caster_id": "wizard_1",
+    "origin": {
+      "x": 10,
+      "y": 12
+    }
+  },
+  "steps": [
+    {
+      "id": "select_targets",
+      "type": "select",
+      "kind": "area",
+      "args": {
+        "shape": "sphere",
+        "radius": 20,
+        "origin": {
+          "$ref": "context.origin"
+        },
+        "include_side": [
+          "enemy"
+        ],
+        "exclude_ids": [
+          {
+            "$ref": "context.caster_id"
+          }
+        ],
+        "must_be_alive": true
+      }
+    },
+    {
+      "id": "dex_save",
+      "type": "check",
+      "kind": "save",
+      "tags": [
+        "nat"
+      ],
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "dice": "1d20",
+        "ability": "dex",
+        "dc": {
+          "$ref": "state.actors.wizard_1.spell_dc"
+        }
+      }
+    },
+    {
+      "id": "fire_damage",
+      "type": "damage",
+      "kind": "apply",
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "damage": [
+          {
+            "dice": "8d6",
+            "bonus": 0,
+            "damage_type": "fire"
+          }
+        ],
+        "save_result": {
+          "$ref": "result.dex_save"
+        },
+        "on_save": "half"
+      }
+    }
+  ]
+}

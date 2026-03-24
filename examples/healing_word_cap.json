@@ -1,0 +1,34 @@
+{
+  "task_id": "healing_word_cap",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "context": {
+    "actor_id": "cleric_1",
+    "target_id": "patient_1"
+  },
+  "steps": [
+    {
+      "id": "pick_target",
+      "type": "select",
+      "kind": "target",
+      "args": {
+        "source": {
+          "$ref": "context.target_id"
+        }
+      }
+    },
+    {
+      "id": "apply_heal",
+      "type": "heal",
+      "kind": "apply",
+      "args": {
+        "targets": {
+          "$ref": "result.pick_target.target_ids"
+        },
+        "amount": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "task_id": "lightning_bolt_line",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "context": {
+    "caster_id": "wizard_line",
+    "origin": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  "steps": [
+    {
+      "id": "select_targets",
+      "type": "select",
+      "kind": "area",
+      "args": {
+        "shape": "line",
+        "origin": {
+          "$ref": "context.origin"
+        },
+        "length": 10,
+        "width": 5,
+        "direction": {
+          "x": 1,
+          "y": 0
+        },
+        "include_side": [
+          "enemy"
+        ],
+        "exclude_ids": [
+          {
+            "$ref": "context.caster_id"
+          }
+        ],
+        "must_be_alive": true
+      }
+    },
+    {
+      "id": "dex_save",
+      "type": "check",
+      "kind": "save",
+      "tags": [
+        "nat"
+      ],
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "dice": "1d20",
+        "ability": "dex",
+        "dc": {
+          "$ref": "state.actors.wizard_line.spell_dc"
+        }
+      }
+    },
+    {
+      "id": "line_damage",
+      "type": "damage",
+      "kind": "apply",
+      "args": {
+        "targets": {
+          "$ref": "result.select_targets.target_ids"
+        },
+        "damage": [
+          {
+            "dice": "8d6",
+            "bonus": 0,
+            "damage_type": "lightning"
+          }
+        ],
+        "save_result": {
+          "$ref": "result.dex_save"
+        },
+        "on_save": "half"
+      }
+    }
+  ]
+}
