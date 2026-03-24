@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from trpg_py import FixedDiceRoller, execute_task, validate_task_document
+from trpg_py.engine import execute_task as engine_execute_task
+from trpg_py.engine import validate_task_document as engine_validate_task_document
 from trpg_py.errors import ValidationError
 
 
@@ -164,6 +166,10 @@ class ValidationAndExecutorTests(unittest.TestCase):
         }
         task = validate_task_document(document)
         self.assertEqual("pick_area", task.steps[0].id)
+
+    def test_engine_namespace_re_exports_executor_entrypoints(self) -> None:
+        self.assertIs(engine_execute_task, execute_task)
+        self.assertIs(engine_validate_task_document, validate_task_document)
 
 
 if __name__ == "__main__":
