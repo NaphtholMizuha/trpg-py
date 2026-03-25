@@ -6,8 +6,9 @@ from trpg_py.errors import StatePathError
 from trpg_py.store import read as package_read
 from trpg_py.store.compat import get_path, set_path
 from trpg_py.store.compat import get_path as compat_get_path
+from trpg_py.store.core import keys as core_keys
 from trpg_py.store.core import read as core_read
-from trpg_py.store import mod, mods, read, reads, write, writes
+from trpg_py.store import keys, mod, mods, read, reads, write, writes
 
 
 class StatePathTests(unittest.TestCase):
@@ -55,8 +56,39 @@ class StatePathTests(unittest.TestCase):
         write(state, "actors.goblin_1.hp.current", 1)
         self.assertEqual(1, get_path(state, "actors.goblin_1.hp.current"))
 
+    def test_store_keys_returns_all_leaf_paths(self) -> None:
+        state = {
+            "actors": {
+                "goblin_1": {"hp": {"current": 7}, "tags": ["enemy", "small"]},
+                "hero_1": {"ac": 16},
+            }
+        }
+        self.assertEqual(
+            [
+                "actors.goblin_1.hp.current",
+                "actors.goblin_1.tags.0",
+                "actors.goblin_1.tags.1",
+                "actors.hero_1.ac",
+            ],
+            keys(state),
+        )
+
+    def test_store_keys_can_filter_by_prefix(self) -> None:
+        state = {
+            "actors": {
+                "goblin_1": {"hp": {"current": 7}, "ac": 13},
+                "hero_1": {"ac": 16},
+            }
+        }
+        self.assertEqual(
+            ["actors.goblin_1.ac", "actors.goblin_1.hp.current"],
+            keys(state, prefix="actors.goblin_1"),
+        )
+        self.assertEqual([], keys(state, prefix="actors.orc_1"))
+
     def test_store_package_exports_match_core_exports(self) -> None:
         self.assertIs(package_read, core_read)
+        self.assertIs(keys, core_keys)
 
 
 if __name__ == "__main__":

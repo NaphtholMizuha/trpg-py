@@ -1,3 +1,3 @@
-from trpg_py.store.core import mod, mods, read, reads, write, writes
+from trpg_py.store.core import keys, mod, mods, read, reads, write, writes
 
-__all__ = ["mod", "mods", "read", "reads", "write", "writes"]
+__all__ = ["keys", "mod", "mods", "read", "reads", "write", "writes"]

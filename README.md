@@ -45,6 +45,54 @@ python -B -m unittest discover -s tests -v
 
 如果你在自己的代码中接入这套引擎，直接调用 Python API 即可。
 
+## Agent Tools
+
+仓库现在还包含两类面向 planner agent 的工具入口：
+
+- `trpg_py.agent.tools.search`：规则检索
+- `trpg_py.agent.tools.fetch_keys`：状态路径发现
+
+### Search Tool
+
+它的职责边界很窄：
+- 只负责根据 query 做 `dense + sparse` 混合召回，并用 reranker 对候选结果重排
+- 只返回原始命中文本和必要元数据
+- 不负责把规则总结成事实，也不负责直接生成 `TaskDocument`
+
+一个最小示例：
+
+```python
+from trpg_py.agent.tools import build_default_searcher, create_search_tool
+
+searcher = build_default_searcher(collection_name="dnd_5e_srd_hybrid")
+tool = create_search_tool(searcher=searcher)
+
+result = tool.invoke({"query": "fireball spell", "limit": 3})
+print(result)
+```
+
+默认搜索器会按环境配置去查 Qdrant，并使用混合检索与 reranker；如果你已经有自己的客户端、embedding 或 reranker，也可以在构造 `HybridRuleSearcher` 时直接注入。
+
+### Fetch Keys Tool
+
+`fetch_keys` 负责返回当前 state 中可引用的点路径，不读取具体值，不写状态。
+
+一个最小示例：
+
+```python
+from trpg_py.agent.tools import create_fetch_keys_tool
+
+state = {"actors": {"goblin_1": {"hp": {"current": 7}}, "hero_1": {"ac": 16}}}
+tool = create_fetch_keys_tool(state=state)
+
+all_paths = tool.invoke({})
+goblin_paths = tool.invoke({"prefix": "actors.goblin_1"})
+print(all_paths)
+print(goblin_paths)
+```
+
+当有匹配路径时返回 `status=ok`，当范围内无路径时返回 `status=no_match`，执行异常时返回 `status=error`。
+
 顶层导入只保留少量稳定入口，例如：
 
 ```python

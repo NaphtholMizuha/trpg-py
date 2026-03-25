@@ -98,6 +98,18 @@ def reads(state: Any, paths: list[str]) -> list[Any]:
     return [_read_one(state, path) for path in paths]
 
 
+def keys(state: Any, prefix: str | None = None) -> list[str]:
+    prefix_value = (prefix or "").strip()
+    discovered = list(_iter_leaf_paths(state))
+    if not prefix_value:
+        return sorted(discovered)
+    return sorted(
+        path
+        for path in discovered
+        if path == prefix_value or path.startswith(prefix_value + ".")
+    )
+
+
 def write(state: Any, path: str, value: Any) -> Any:
     return _write_one(state, path, value)
 
@@ -135,4 +147,27 @@ def mods(
     return results
 
 
-__all__ = ["mod", "mods", "read", "reads", "split_path", "write", "writes"]
+def _iter_leaf_paths(value: Any, path: str = "") -> list[str]:
+    if isinstance(value, dict):
+        paths: list[str] = []
+        for raw_key, nested in value.items():
+            key = str(raw_key)
+            next_path = f"{path}.{key}" if path else key
+            if isinstance(nested, (dict, list)):
+                paths.extend(_iter_leaf_paths(nested, next_path))
+            else:
+                paths.append(next_path)
+        return paths
+    if isinstance(value, list):
+        paths: list[str] = []
+        for index, nested in enumerate(value):
+            next_path = f"{path}.{index}" if path else str(index)
+            if isinstance(nested, (dict, list)):
+                paths.extend(_iter_leaf_paths(nested, next_path))
+            else:
+                paths.append(next_path)
+        return paths
+    return [path] if path else []
+
+
+__all__ = ["keys", "mod", "mods", "read", "reads", "split_path", "write", "writes"]
