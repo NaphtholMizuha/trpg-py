@@ -5,12 +5,12 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-import main as demo_main
+from smoke import test_engine as demo_main
 
 
 def run_main(*args: str) -> str:
     buffer = io.StringIO()
-    with patch("sys.argv", ["main.py", *args]):
+    with patch("sys.argv", ["test_engine.py", *args]):
         with redirect_stdout(buffer):
             demo_main.main()
     return buffer.getvalue()
@@ -100,6 +100,11 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn("- total demos: 12", output)
         self.assertIn("- failed: 3", output)
         self.assertIn("- overall status: failed", output)
+
+    def test_default_example_uses_local_script_default(self) -> None:
+        output = run_main()
+        self.assertIn("Task: goblin_scimitar_attack", output)
+        self.assertIn("Status: success", output)
 
 
 if __name__ == "__main__":

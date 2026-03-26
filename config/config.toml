@@ -1,0 +1,37 @@
+[planner]
+model = "openai:gpt-4.1-mini"
+base_url = "https://api.lingyaai.cn/v1"
+api_key_env = "LINGYA_API_KEY"
+timeout = 120.0
+max_retries = 6
+interrupt_on = {}
+max_planning_rounds = 2
+tool_budget = 4
+
+[planner.prompt]
+directory = "prompts"
+system_file = "planner_system.txt"
+user_file = "planner_user.txt"
+
+[planner.smoke]
+world_state_file = "world_state.toml"
+
+[search.api]
+base_url = "https://api.siliconflow.cn/v1"
+api_key_env = "SILICONFLOW_API_KEY"
+
+[search.models]
+dense_embedding = "BAAI/bge-m3"
+sparse_embedding = "Qdrant/bm25"
+reranker = "BAAI/bge-reranker-v2-m3"
+
+[search.qdrant]
+url = "http://localhost:6333"
+collection_name = "dnd_5e_srd_hybrid"
+dense_vector_name = "dense"
+sparse_vector_name = "sparse"
+
+[search]
+default_limit = 3
+default_fetch_k = 20
+rerank_timeout = 30.0

@@ -4,27 +4,27 @@ from __future__ import annotations
 fetch_keys 功能演示脚本
 
 使用方式:
-  python test_fetch_keys.py
-  python test_fetch_keys.py --prefix actors.goblin_1
-  python test_fetch_keys.py --json
-  python test_fetch_keys.py --state-file ./examples/fetch_keys_state.json --prefix actors.hero_1
+  python smoke/test_fetch_keys.py
+  python smoke/test_fetch_keys.py --prefix actors.goblin_1
+  python smoke/test_fetch_keys.py --json
+  python smoke/test_fetch_keys.py --state-file ./examples/fetch_keys_state.json --prefix actors.hero_1
 """
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from trpg_py.agent.tools import create_fetch_keys_tool
 
 
-DEFAULT_STATE: dict[str, Any] = {
-    "actors": {
-        "goblin_1": {"hp": {"current": 7, "max": 7}, "ac": 13, "tags": ["enemy", "small"]},
-        "hero_1": {"hp": {"current": 20, "max": 24}, "ac": 16},
-    },
-    "round": 3,
-}
+DEFAULT_STATE_FILE = PROJECT_ROOT / "examples" / "fetch_keys_state.json"
+DEFAULT_NO_MATCH_PREFIX = "not.exists.prefix"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,15 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="仅输出 JSON 结果")
     parser.add_argument(
         "--state-file",
-        default=None,
-        help="可选 JSON 文件路径；提供后用该文件替代内置演示 state",
+        default=str(DEFAULT_STATE_FILE),
+        help="可选 JSON 文件路径；默认使用 examples/fetch_keys_state.json",
     )
     return parser
 
 
-def load_state(path: str | None) -> dict[str, Any]:
-    if path is None:
-        return DEFAULT_STATE
+def load_state(path: str | Path) -> dict[str, Any]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("state-file must contain a JSON object")
@@ -50,12 +48,16 @@ def load_state(path: str | None) -> dict[str, Any]:
 
 def main() -> int:
     args = build_parser().parse_args()
-    state = load_state(args.state_file)
+    state_path = Path(args.state_file).expanduser().resolve()
+    prefix = args.prefix
+    no_match_prefix = DEFAULT_NO_MATCH_PREFIX
+
+    state = load_state(state_path)
     tool = create_fetch_keys_tool(state=state)
 
     result_all = tool.invoke({})
-    result_prefix = tool.invoke({"prefix": args.prefix}) if args.prefix else None
-    result_no_match = tool.invoke({"prefix": "not.exists.prefix"})
+    result_prefix = tool.invoke({"prefix": prefix}) if prefix else None
+    result_no_match = tool.invoke({"prefix": no_match_prefix})
 
     if args.json:
         payload = {
@@ -72,13 +74,13 @@ def main() -> int:
     print("全量枚举:")
     print_human_result(result_all)
 
-    if args.prefix:
+    if prefix:
         print("-" * 72)
-        print(f"按范围枚举: prefix={args.prefix}")
+        print(f"按范围枚举: prefix={prefix}")
         print_human_result(result_prefix or {"status": "unknown", "items": []})
 
     print("-" * 72)
-    print("无命中演示: prefix=not.exists.prefix")
+    print(f"无命中演示: prefix={no_match_prefix}")
     print_human_result(result_no_match)
     return 0
 

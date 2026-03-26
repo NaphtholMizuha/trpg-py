@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+import io
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from trpg_py.agent.tools import HybridRuleSearcher, SearchResult, create_search_tool
+from loguru import logger
+
+from tests.config_helpers import write_project_config
+from trpg_py.agent.tools import HybridRuleSearcher, OpenAIEmbedder, SearchResult, build_default_searcher, create_search_tool
+from trpg_py.config import clear_project_config_cache
 
 
 class FakeDenseEmbedder:
@@ -75,6 +84,19 @@ class HybridRuleSearcherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dense = FakeDenseEmbedder()
         self.sparse = FakeSparseEmbedder()
+        self.log_output = io.StringIO()
+        self.log_handler_id = logger.add(self.log_output, format="{message}")
+        self.env_patcher = patch.dict(
+            os.environ,
+            {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+            clear=False,
+        )
+        self.env_patcher.start()
+
+    def tearDown(self) -> None:
+        self.env_patcher.stop()
+        logger.remove(self.log_handler_id)
+        clear_project_config_cache()
 
     def test_search_returns_reranked_hits_and_metadata(self) -> None:
         qdrant = FakeQdrantClient(
@@ -118,6 +140,9 @@ class HybridRuleSearcherTests(unittest.TestCase):
             ("fireball", ["Magic Missile text", "Fireball text"], 2),
             reranker.calls[0],
         )
+        logs = self.log_output.getvalue()
+        self.assertIn("tool_input tool=search query='fireball' limit=2 fetch_k=4", logs)
+        self.assertIn("tool_output tool=search status=ok hits=2", logs)
 
     def test_search_returns_no_match_when_qdrant_returns_no_points(self) -> None:
         searcher = HybridRuleSearcher(
@@ -133,6 +158,8 @@ class HybridRuleSearcherTests(unittest.TestCase):
         self.assertEqual("no_match", result.status)
         self.assertEqual([], result.hits)
         self.assertIsNone(result.error)
+        logs = self.log_output.getvalue()
+        self.assertIn("tool_output tool=search status=no_match hits=0", logs)
 
     def test_search_returns_error_when_qdrant_fails(self) -> None:
         searcher = HybridRuleSearcher(
@@ -148,6 +175,9 @@ class HybridRuleSearcherTests(unittest.TestCase):
         self.assertEqual("error", result.status)
         self.assertEqual("RuntimeError", result.error.type)
         self.assertIn("qdrant unavailable", result.error.message)
+        logs = self.log_output.getvalue()
+        self.assertIn("tool_output tool=search status=error", logs)
+        self.assertIn("error_type=RuntimeError", logs)
 
     def test_search_returns_error_when_reranker_fails(self) -> None:
         searcher = HybridRuleSearcher(
@@ -164,8 +194,52 @@ class HybridRuleSearcherTests(unittest.TestCase):
         self.assertEqual("RuntimeError", result.error.type)
         self.assertIn("rerank unavailable", result.error.message)
 
+    def test_build_default_searcher_uses_project_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            searcher = build_default_searcher(config_path=str(config_path))
+
+        self.assertEqual("rules", searcher.collection_name)
+        self.assertEqual("http://qdrant.example:6333", searcher.qdrant_url)
+        self.assertEqual("dense_vec", searcher.dense_vector_name)
+        self.assertEqual("sparse_vec", searcher.sparse_vector_name)
+        self.assertEqual(4, searcher.default_limit)
+        self.assertEqual(11, searcher.default_fetch_k)
+        self.assertIsInstance(searcher.dense_embedder, OpenAIEmbedder)
+        self.assertEqual("dense-model", searcher.dense_embedder.model)
+        self.assertEqual("https://search.example/v1", searcher.dense_embedder.base_url)
+
+    def test_explicit_searcher_dependencies_do_not_require_project_config(self) -> None:
+        searcher = HybridRuleSearcher(
+            collection_name="explicit-rules",
+            qdrant_url="http://explicit-qdrant:6333",
+            dense_vector_name="dense",
+            sparse_vector_name="sparse",
+            default_limit=2,
+            default_fetch_k=5,
+            dense_embedder=self.dense,
+            sparse_embedder=self.sparse,
+            reranker=FakeReranker(results=[]),
+            config_path="/tmp/definitely-missing-config.toml",
+        )
+
+        self.assertEqual("explicit-rules", searcher.collection_name)
+        self.assertEqual("http://explicit-qdrant:6333", searcher.qdrant_url)
+
 
 class SearchToolWrapperTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.env_patcher = patch.dict(
+            os.environ,
+            {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+            clear=False,
+        )
+        self.env_patcher.start()
+
+    def tearDown(self) -> None:
+        self.env_patcher.stop()
+        clear_project_config_cache()
+
     def test_langchain_tool_reuses_searcher_result(self) -> None:
         dense = FakeDenseEmbedder()
         sparse = FakeSparseEmbedder()
@@ -189,6 +263,15 @@ class SearchToolWrapperTests(unittest.TestCase):
         self.assertEqual(1, len(qdrant.calls))
         self.assertEqual(5, qdrant.calls[0]["limit"])
         self.assertEqual(("fireball", ["Fireball text"], 1), reranker.calls[0])
+
+    def test_create_search_tool_builds_default_searcher_from_project_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            tool = create_search_tool(config_path=str(config_path))
+
+        self.assertEqual("rules", tool.searcher.collection_name)
+        self.assertEqual("http://qdrant.example:6333", tool.searcher.qdrant_url)
+        self.assertEqual(4, tool.searcher.default_limit)
 
 
 if __name__ == "__main__":

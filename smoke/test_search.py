@@ -4,30 +4,27 @@ from __future__ import annotations
 真实向量库检索测试脚本
 
 使用方式:
-  python test_search.py "fireball spell"
-  python test_search.py "goblin ranged attack in melee disadvantage" --limit 5 --fetch-k 25
-  python test_search.py --tool "healing word spell"
-  python test_search.py --json "counterspell reaction timing"
+  python smoke/test_search.py "fireball spell"
+  python smoke/test_search.py "goblin ranged attack in melee disadvantage" --limit 5 --fetch-k 25
+  python smoke/test_search.py --tool "healing word spell"
+  python smoke/test_search.py --json "counterspell reaction timing"
+  python smoke/test_search.py --config config/config.toml "fireball spell"
 
-环境变量:
-  QDRANT_URL           - Qdrant 地址，默认 http://localhost:6333
-  QDRANT_COLLECTION    - 集合名，默认 dnd_5e_srd_hybrid
-  SILICONFLOW_API_KEY  - dense embedding / reranker 默认 API key
-  SILICONFLOW_BASE_URL - dense embedding / reranker 默认 base URL
-  OPENAI_API_KEY       - 如果不用 SiliconFlow，可作为备选 API key
+项目运行配置只从单一 TOML 文件读取，默认是 `config/config.toml`。
 """
 
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
-from trpg_py.agent.tools import build_default_searcher, create_search_tool
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    load_dotenv = None
+from trpg_py.agent.tools import build_default_searcher, create_search_tool
+from trpg_py.config import DEFAULT_PROJECT_CONFIG_PATH
 
 
 DEFAULT_QUERY = "fireball spell dexterity save 8d6 fire damage"
@@ -41,12 +38,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_QUERY,
         help=f"检索问题或关键词，默认: {DEFAULT_QUERY!r}",
     )
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_PROJECT_CONFIG_PATH),
+        help="项目配置 TOML 路径，默认使用 config/config.toml",
+    )
     parser.add_argument("--limit", type=int, default=3, help="最终返回命中数")
     parser.add_argument("--fetch-k", type=int, default=20, help="混合召回候选数")
     parser.add_argument("--collection", default=None, help="Qdrant collection 名称")
     parser.add_argument("--qdrant-url", default=None, help="Qdrant 地址")
-    parser.add_argument("--dense-vector-name", default="dense", help="Qdrant dense 向量名")
-    parser.add_argument("--sparse-vector-name", default="sparse", help="Qdrant sparse 向量名")
+    parser.add_argument("--dense-vector-name", default=None, help="Qdrant dense 向量名")
+    parser.add_argument("--sparse-vector-name", default=None, help="Qdrant sparse 向量名")
     parser.add_argument(
         "--tool",
         action="store_true",
@@ -62,10 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    if load_dotenv is not None:
-        load_dotenv()
-
     args = build_parser().parse_args()
+    config_path = str(Path(args.config).expanduser())
 
     searcher = build_default_searcher(
         collection_name=args.collection,
@@ -74,6 +74,7 @@ def main() -> int:
         sparse_vector_name=args.sparse_vector_name,
         default_limit=args.limit,
         default_fetch_k=args.fetch_k,
+        config_path=config_path,
     )
 
     if args.tool:

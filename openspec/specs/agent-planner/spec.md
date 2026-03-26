@@ -1,0 +1,249 @@
+# agent-planner 规范
+
+## 目的
+定义 planner agent 的职责边界、信息获取流程、HITL 交互语义，以及输出 `TaskDocument` 的结构与校验闭环，确保 planner 在信息不完整场景下可解释、可恢复、可执行。
+## 需求
+### 需求:planner 必须驻留在 agent 命名空间并以结构化接口对外
+系统必须在 `trpg_py.agent` 命名空间下提供 planner 能力，并以结构化输入输出接口供调用方使用，禁止仅通过临时 prompt 或不可复用脚本触发规划流程。planner 的默认模型认证信息必须通过统一配置解析后的环境变量密钥获取，而不是要求调用方把密钥直接写入项目配置文件。
+
+#### 场景:调用方以结构化方式发起规划
+- **当** 调用方提交 DM 指令和规划上下文
+- **那么** planner 通过稳定接口接收请求
+- **那么** 调用方无需了解内部工具编排细节
+- **那么** 调用方无需在统一配置文件中直接保存真实模型密钥
+
+### 需求:planner 默认配置必须通过 api_key_env 获取模型密钥
+系统必须让 planner 的统一配置默认通过 `api_key_env` 获取模型 API key，禁止要求调用方在项目配置文件中直接写入 planner 密钥。
+
+#### 场景:planner 从统一配置读取默认密钥
+- **当** 调用方通过统一配置创建 planner 且未显式传入 `api_key`
+- **那么** planner 必须使用配置加载层解析后的环境变量密钥
+- **那么** 调用方无需在配置文件中直接保存真实密钥
+
+### 需求:planner 必须以 TaskDocument 作为唯一执行目标
+planner 必须以生成可被执行器消费的 `TaskDocument` 为目标产物，并且该文档必须满足当前执行器的结构约束（`task_id`、`version`、`policy`、`context`、`steps` 以及步骤级 `id/type/kind/args` 等字段语义）。
+
+#### 场景:planner 产出可执行任务文档
+- **当** planner 判断信息充分
+- **那么** 输出中包含完整 `TaskDocument`
+- **那么** 该文档可直接进入执行器校验与执行流程
+
+### 需求:planner 必须通过 search 和 fetch_keys 获取证据
+planner 必须将 `search` 与 `fetch_keys` 作为基础信息工具，并通过工具调用结果驱动后续推理分支。planner 禁止在可调用工具前提下跳过取证直接凭空生成关键规则结论或关键路径引用。
+
+#### 场景:planner 使用 search 补充规则证据
+- **当** DM 指令涉及规则判断（如攻击、豁免、伤害）
+- **那么** planner 可以调用 `search` 检索规则原文
+- **那么** 规则结论建立在检索证据之上
+
+#### 场景:planner 使用 fetch_keys 补充状态路径证据
+- **当** planner 需要引用状态路径生成步骤参数
+- **那么** planner 可以调用 `fetch_keys` 枚举候选路径
+- **那么** 产出的路径引用与 state 点路径语义保持一致
+
+### 需求:planner 必须显式区分 ready、needs_human 与 blocked
+planner 必须以稳定状态语义区分三类规划结果：可直接执行、需要 DM 澄清、以及系统阻塞。系统禁止把这三类情况折叠为单一自由文本回复。
+
+#### 场景:信息充分时返回 ready
+- **当** planner 已获得足够证据并完成文档校验
+- **那么** 返回 `status=ready`
+- **那么** 返回体包含 `task_document`
+
+#### 场景:信息不足时返回 needs_human
+- **当** planner 判断关键信息不足或不确定性过高
+- **那么** 返回 `status=needs_human`
+- **那么** 返回体包含结构化澄清问题列表
+
+#### 场景:系统故障时返回 blocked
+- **当** 工具调用连续失败或依赖不可用导致无法规划
+- **那么** 返回 `status=blocked`
+- **那么** 返回体包含可读错误原因与恢复建议
+
+### 需求:planner 必须支持 LLM 主导的不确定性判定并保留最小硬约束
+系统必须允许 planner 由 LLM 主导判断“信息是否足够”，并在不确定时主动触发 HITL。与此同时，系统必须保留最小硬约束用于兜底，例如文档结构非法、关键实体不可唯一映射或关键工具错误等不可忽略风险。
+
+#### 场景:LLM 识别语义不确定并触发澄清
+- **当** 同一指令可映射到多个合法目标且证据不足以唯一决策
+- **那么** planner 主动触发 `needs_human`
+- **那么** 澄清问题聚焦最小必要决策点
+
+#### 场景:命中硬约束时禁止强行输出 ready
+- **当** 规划结果违反执行器必需结构或关键依赖不可用
+- **那么** planner 不得返回 `status=ready`
+- **那么** planner 必须转为 `needs_human` 或 `blocked`
+
+### 需求:planner 输出必须包含可解释的缺口与假设信息
+planner 在 `needs_human` 或存在推断前提时，必须返回结构化 `missing_info` 和 `assumptions` 等解释字段，禁止只返回不可审计的最终结论。
+
+#### 场景:planner 返回澄清上下文
+- **当** planner 需要 DM 补充法术环位或目标选择
+- **那么** 返回体列出对应 `missing_info`
+- **那么** 返回体说明若不澄清将导致的决策分歧
+
+### 需求:planner 必须采用 schema 约束与执行器校验的双层闭环
+系统必须对 planner 生成结果同时应用 JSON Schema 结构约束与执行器语义校验。系统不得仅依赖 prompt 约定保证产物合法性。
+
+#### 场景:Schema 拦截基础结构错误
+- **当** planner 初稿缺失顶层字段或步骤关键字段
+- **那么** Schema 校验先拒绝该产物
+- **那么** planner 进入修复流程
+
+#### 场景:执行器校验拦截语义错误
+- **当** planner 产物通过 Schema 但引用未来步骤结果
+- **那么** 执行器校验拒绝该产物
+- **那么** planner 根据错误原因重试修复或触发 HITL
+
+### 需求:planner 必须在提问前优先完成可用工具取证
+系统必须要求 planner 在触发 HITL 之前尽可能完成 `search` 和 `fetch_keys` 的取证尝试，避免因未检索或未枚举路径造成过早提问。
+
+#### 场景:先取证后提问
+- **当** DM 指令初看存在歧义
+- **当** 工具取证后仍无法收敛到单一可执行方案
+- **那么** planner 才触发 `needs_human`
+- **那么** 提问内容基于已获取证据而非泛化追问
+
+### 需求:planner 必须保持与执行器的职责分离
+planner 只负责“规划与文档生成”，不得在 planner 层直接提交状态写入或替代引擎执行步骤。规则结算结果必须由执行器基于 `TaskDocument` 在运行时产生。
+
+#### 场景:planner 生成但不执行
+- **当** planner 返回 `status=ready`
+- **那么** 返回体仅包含待执行文档与规划元信息
+- **那么** 实际状态变化仍由执行器负责提交
+
+### 需求:系统必须允许后续扩展 reads 类值读取工具而不破坏 planner 契约
+系统必须允许 planner 后续集成值读取类工具（如 `reads`）以降低 HITL 频率，但该扩展不得破坏既有 `ready/needs_human/blocked` 返回语义与校验闭环。
+
+#### 场景:后续接入 reads 工具
+- **当** planner 新增值读取工具用于补充证据
+- **那么** 现有规划状态语义和输出契约保持兼容
+- **那么** 既有调用方无需改动核心消费流程
+
+### 需求:planner factory 必须从统一项目配置读取默认运行参数
+系统必须要求 planner factory 的默认模型、接入点、超时、重试次数、规划轮数和工具预算来自统一项目配置，而禁止继续以模块内 `DEFAULT_*` 常量或独立环境变量解析逻辑作为长期配置来源。
+
+#### 场景:planner factory 使用统一配置创建实例
+- **当** 调用方未显式覆写 planner factory 的运行参数
+- **那么** planner factory 从统一项目配置读取默认值
+- **那么** planner 实例的运行行为与项目配置文件保持一致
+
+### 需求:planner 必须通过统一配置入口消费配置
+系统必须要求 planner 通过集中配置模块获取运行配置，而禁止在 planner 模块内部直接读取环境变量或散落的默认常量来形成项目级运行配置。
+
+#### 场景:planner 模块不直接解析环境变量
+- **当** planner 需要获取模型接入参数或运行参数
+- **那么** planner 通过统一配置入口读取对应字段
+- **那么** planner 模块不再自行维护独立环境变量解析路径
+
+### 需求:planner 必须提供可手动运行的集成测试脚本
+系统必须提供一个位于 `smoke/test_planner.py` 的可手动运行脚本，用于让开发者直接观察 planner 的结构化效果，禁止要求开发者只能通过单元测试或临时代码片段验证 planner 行为。该脚本必须以真实 planner 配置链路和真实工具链路作为默认运行路径，而不是以内置 fake 响应模拟结果。
+
+#### 场景:开发者手动运行 planner 集成脚本
+- **当** 开发者执行 `smoke/test_planner.py` 并提供 DM 指令或示例场景
+- **那么** 脚本调用 `trpg_py.agent` 暴露的 planner 能力发起一次真实规划
+- **那么** 规划过程使用真实 `search` 与真实 `fetch_keys`
+- **那么** 输出中展示真实返回的 `ready`、`needs_human` 或 `blocked` 等结构化状态
+
+### 需求:planner 集成脚本必须帮助开发者观察代表性规划结果
+系统必须让 planner 集成脚本支持至少一个可复现示例场景，并能够向开发者清晰展示 `task_document`、澄清问题或阻塞原因等核心结果。该结果必须来源于真实调用，而不是脚本预制的假响应。
+
+#### 场景:脚本展示 planner 结果摘要
+- **当** planner 集成脚本完成一次规划请求
+- **那么** 调用方可以从输出中看出 planner 返回的真实状态类型
+- **那么** 调用方可以查看对应的真实 `task_document`、`questions` 或 `error` 摘要
+
+### 需求:planner smoke 脚本必须默认验证真实配置链路
+系统必须让 `smoke/test_planner.py` 默认读取项目统一配置并构造真实 planner，禁止以内置 fake agent、fake LLM、fake tool 或脚本预制结果作为默认 smoke 路径。
+
+#### 场景:开发者直接运行 planner smoke 脚本
+- **当** 开发者执行 `python smoke/test_planner.py`
+- **那么** 脚本必须读取 `config/config.toml` 或显式传入的配置路径
+- **那么** 脚本必须通过 `trpg_py.agent.create_planner(...)` 构造真实 planner
+- **那么** 规划过程中必须使用真实 `search` 与真实 `fetch_keys` 工具链路
+- **那么** 脚本不得默认返回脚本内部伪造的规划结果
+
+### 需求:planner smoke 脚本必须展示真实规划结果
+系统必须让 `smoke/test_planner.py` 的输出直接来源于真实 planner 调用结果，禁止把预制 `ready`、`needs_human` 或 `blocked` 响应当作 smoke 输出真相。
+
+#### 场景:脚本输出真实 planner 结果
+- **当** planner smoke 脚本完成一次规划调用
+- **那么** 人类可读摘要或 JSON 输出必须展示真实返回的 `status`
+- **那么** 若返回 `ready`，输出中必须可见真实 `task_document` 摘要或正文
+- **那么** 若返回 `needs_human` 或 `blocked`，输出中必须可见真实问题列表或错误信息
+
+### 需求:planner 必须基于 Deep Agents 实现
+系统必须基于 LangChain 的 Deep Agents（`deepagents`）实现 planner 主流程，禁止将第一版 planner 实现为仅依赖基础 LangChain agent loop 的自由编排方案。
+
+#### 场景:调用方通过 Deep Agents planner 执行规划
+- **当** 调用方创建并运行 planner
+- **那么** planner 由 Deep Agents 承载规划与工具编排能力
+- **那么** planner 可在同一运行流中消费 `search`、`fetch_keys` 并输出结构化结果
+
+### 需求:planner 必须提供 factory 统一模型接入与运行配置
+系统必须提供 planner factory 作为统一创建入口，用于集中配置模型接入参数（如 `model`、`base_url`、`api_key`）以及运行参数（如 `timeout`、`max_retries`、`interrupt_on`）。系统禁止在业务调用点分散创建 Deep Agents 实例并重复硬编码接入参数。
+
+#### 场景:调用方通过 factory 注入自定义模型接入点
+- **当** 调用方需要使用自定义 OpenAI 兼容 API 接入点
+- **那么** 调用方可以通过 planner factory 注入 `base_url` 与 `api_key`
+- **那么** planner 使用该配置创建 Deep Agents 运行实例
+
+#### 场景:factory 按统一优先级解析配置
+- **当** 同一配置项同时存在调用参数、环境变量和默认值
+- **那么** factory 必须按统一优先级解析（调用参数优先于环境变量，环境变量优先于默认值）
+- **那么** planner 实例的运行配置可被稳定预测和复现
+
+### 需求:planner 必须提供结构化三态输出
+系统必须以 `ready`、`needs_human`、`blocked` 三态返回规划结果，禁止将可执行结果、澄清请求和系统故障折叠为单一自由文本响应。
+
+#### 场景:信息充分时返回 ready
+- **当** planner 已完成取证并生成合法任务文档
+- **那么** 返回状态为 `ready`
+- **那么** 返回体包含可执行 `task_document`
+
+#### 场景:信息不足时返回 needs_human
+- **当** planner 判断关键信息不足以安全生成任务文档
+- **那么** 返回状态为 `needs_human`
+- **那么** 返回体包含结构化澄清问题
+
+#### 场景:系统阻塞时返回 blocked
+- **当** 关键依赖不可用导致规划无法继续
+- **那么** 返回状态为 `blocked`
+- **那么** 返回体包含错误原因与恢复建议
+
+### 需求:planner 必须先取证再触发 HITL
+系统必须要求 planner 在触发 `needs_human` 之前优先尝试使用 `search` 与 `fetch_keys` 进行证据收集，禁止在可取证前提下直接向 DM 追问。
+
+#### 场景:先工具取证后仍不确定
+- **当** planner 完成至少一轮工具取证后仍存在关键歧义
+- **那么** planner 触发 `needs_human`
+- **那么** 问题内容基于已检索证据形成
+
+### 需求:planner 必须执行双层校验闭环
+系统必须对 planner 生成的任务文档先执行 Schema 结构校验，再执行执行器语义校验。若任一校验失败，planner 必须进入修复或澄清分支，禁止直接返回 `ready`。
+
+#### 场景:Schema 失败触发修复
+- **当** 任务文档缺少必需字段或字段类型错误
+- **那么** planner 不得返回 `ready`
+- **那么** planner 进入修复流程或转入 `needs_human`
+
+#### 场景:语义校验失败触发修复
+- **当** 任务文档引用未来步骤结果或使用非法 type/kind
+- **那么** planner 不得返回 `ready`
+- **那么** planner 基于错误信息修复或转入 `needs_human`
+
+### 需求:planner 必须按固定优先级处理冲突证据
+系统在 DM 意见、store 状态证据与 search 规则证据互相矛盾时，必须按固定优先级决策：`DM 意见 > store > search`。系统禁止在冲突场景下忽略该优先级并随机采信证据来源。
+
+#### 场景:冲突证据按优先级收敛
+- **当** planner 同时获得互相冲突的 DM、store 和 search 证据
+- **那么** planner 优先采信 DM 意见
+- **那么** 若缺少 DM 明确意见则按 `store > search` 顺序采信
+
+### 需求:planner 依赖的工具调用必须可通过运行期日志观察
+系统必须确保 planner 所依赖的工具调用在运行期可观察，禁止让调用方只能依赖最终 `ready/needs_human/blocked` 结果反推中间工具输入输出。
+
+#### 场景:planner 调用 search 或 fetch_keys 时留下工具日志
+- **当** planner 在一次规划过程中调用 `search` 或 `fetch_keys`
+- **那么** 运行期日志中必须可见该工具调用的输入参数摘要
+- **那么** 运行期日志中必须可见该工具调用的输出状态或错误结果
+- **那么** 调用方无需修改 planner 业务逻辑即可观察这些日志
+

@@ -1,0 +1,34 @@
+"actors.goblin_1.id" = "goblin_1"
+"actors.goblin_1.name" = "洞穴哥布林斥候"
+"actors.goblin_1.side" = "enemy"
+"actors.goblin_1.alive" = true
+"actors.goblin_1.position" = { x = 1, y = 1 }
+"actors.goblin_1.ac" = 13
+"actors.goblin_1.hp" = { current = 7, max = 7 }
+"actors.goblin_1.speed" = 30
+"actors.goblin_1.notes" = "擅长近战骚扰，偏好先用弯刀贴身攻击。"
+"actors.goblin_1.attacks.scimitar.label" = "弯刀"
+"actors.goblin_1.attacks.scimitar.to_hit" = 4
+"actors.goblin_1.attacks.scimitar.reach" = 5
+"actors.goblin_1.attacks.scimitar.damage" = [{ dice = "1d6", bonus = 2, damage_type = "slashing" }]
+"actors.goblin_1.attacks.shortbow.label" = "短弓"
+"actors.goblin_1.attacks.shortbow.to_hit" = 4
+"actors.goblin_1.attacks.shortbow.range" = "80/320"
+"actors.goblin_1.attacks.shortbow.damage" = [{ dice = "1d6", bonus = 2, damage_type = "piercing" }]
+
+"actors.hero_1.id" = "hero_1"
+"actors.hero_1.name" = "艾尔德拉"
+"actors.hero_1.side" = "player"
+"actors.hero_1.alive" = true
+"actors.hero_1.position" = { x = 1, y = 2 }
+"actors.hero_1.ac" = 16
+"actors.hero_1.hp" = { current = 20, max = 20 }
+"actors.hero_1.speed" = 30
+"actors.hero_1.class_summary" = "圣武士 5 级"
+"actors.hero_1.weapon.main_hand" = "长剑"
+"actors.hero_1.notes" = "正与哥布林近战缠斗。"
+
+"environment.scene" = "地下遗迹休整间隙"
+"environment.lighting" = "火把照明"
+"environment.mood" = "短暂喘息，仍可听见远处战斗声"
+"environment.encounter_summary" = "哥布林斥候已经逼近 hero_1，双方处于近战距离。"

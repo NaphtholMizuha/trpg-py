@@ -1,0 +1,20 @@
+{
+  "actors": {
+    "goblin_1": {
+      "hp": {
+        "current": 7,
+        "max": 7
+      },
+      "ac": 13,
+      "tags": ["enemy", "small"]
+    },
+    "hero_1": {
+      "hp": {
+        "current": 20,
+        "max": 24
+      },
+      "ac": 16
+    }
+  },
+  "round": 3
+}

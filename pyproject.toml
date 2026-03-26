@@ -5,8 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "deepagents>=0.0.0",
     "fastembed>=0.7.1",
+    "langchain-openai>=0.0.0",
     "langchain-core>=1.2.0",
+    "langgraph>=0.0.0",
+    "loguru>=0.7.0",
     "openai>=1.0.0",
     "pydantic>=2.0.0",
     "qdrant-client>=1.17.0",

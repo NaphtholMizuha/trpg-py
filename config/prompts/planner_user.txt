@@ -1,0 +1,150 @@
+Plan the DM instruction into a TaskDocument for the TRPG engine.
+
+A valid TaskDocument is an execution DSL. It is not a natural-language plan.
+
+TaskDocument minimal shape:
+{
+  "task_id": "string",
+  "version": 1,
+  "policy": {},
+  "context": {},
+  "steps": [
+    {
+      "id": "string",
+      "type": "select|check|damage|heal|resource|effect|state",
+      "kind": "depends on type",
+      "args": {},
+      "tags": [],
+      "when": null
+    }
+  ]
+}
+
+Allowed type/kind pairs:
+- select: target | area | filtered
+- check: attack | save | ability | skill
+- damage: apply
+- heal: apply
+- resource: consume
+- effect: add | remove
+- state: set | adjust
+
+Reference rules:
+- Use {"$ref": "context.foo"}, {"$ref": "state.actors.hero_1.ac"}, or {"$ref": "result.attack_roll.outcome"}.
+- A step may only reference results from earlier steps.
+- Use "when" for conditional execution.
+
+Attack planning pattern:
+1. Optionally select targets.
+2. Create a check.attack step.
+3. Create a damage.apply step gated by the attack result.
+
+Do not invent substitute step fields such as action, actor, target, rule, or description in place of id/type/kind/args.
+
+Canonical example:
+{
+  "task_id": "goblin_scimitar_attack",
+  "version": 1,
+  "policy": {
+    "ruleset": "dnd5e-2014"
+  },
+  "context": {
+    "actor_id": "goblin_1",
+    "target_id": "hero_1"
+  },
+  "steps": [
+    {
+      "id": "pick_target",
+      "type": "select",
+      "kind": "target",
+      "args": {
+        "source": {
+          "$ref": "context.target_id"
+        },
+        "entity_pool": {
+          "$ref": "state.actors"
+        },
+        "targeting": {
+          "source_position": {
+            "$ref": "state.actors.goblin_1.position"
+          },
+          "max_range": 5,
+          "range_metric": "euclidean"
+        }
+      }
+    },
+    {
+      "id": "attack_roll",
+      "type": "check",
+      "kind": "attack",
+      "tags": [
+        "nat"
+      ],
+      "args": {
+        "dice": "1d20",
+        "modifier": {
+          "$ref": "state.actors.goblin_1.attacks.scimitar.to_hit"
+        },
+        "target_id": {
+          "$ref": "context.target_id"
+        },
+        "target_ac": {
+          "$ref": "state.actors.hero_1.ac"
+        }
+      }
+    },
+    {
+      "id": "apply_damage",
+      "type": "damage",
+      "kind": "apply",
+      "when": {
+        "$ref": "result.attack_roll.outcome",
+        "in": [
+          "success",
+          "crit_success"
+        ]
+      },
+      "args": {
+        "targets": {
+          "$ref": "result.pick_target.target_ids"
+        },
+        "damage": [
+          {
+            "dice": "1d6",
+            "bonus": 2,
+            "damage_type": "slashing"
+          }
+        ],
+        "is_critical": {
+          "$ref": "result.attack_roll.outcome",
+          "eq": "crit_success"
+        }
+      }
+    }
+  ]
+}
+
+DM instruction:
+{{instruction}}
+
+Context JSON:
+{{context_json}}
+
+Policy JSON:
+{{policy_json}}
+
+Tool budget hint: {{tool_budget}}
+
+Use search for rule evidence and fetch_keys for state-path discovery before asking the DM.
+Use lint to validate a candidate TaskDocument before returning status ready.
+
+If information is insufficient, return status needs_human with questions, missing_info, and assumptions.
+
+If you can produce a valid TaskDocument, return status ready with task_document.
+
+Do not execute the task. Only plan it.
+
+When evidence conflicts, follow priority DM > store > search.
+
+Repair feedback:
+{{validation_feedback}}

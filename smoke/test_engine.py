@@ -8,10 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from trpg_py import FixedDiceRoller, execute_task
 
 
-ROOT = Path(__file__).parent
+DEFAULT_EXAMPLE_NAME = "goblin_scimitar_attack"
+EXAMPLES_DIR = PROJECT_ROOT / "examples"
 
 
 @dataclass(frozen=True)
@@ -367,7 +372,7 @@ def get_demo_definition(example_name: str) -> DemoDefinition:
 
 
 def load_demo_task(task_file: str) -> dict[str, Any]:
-    return json.loads((ROOT / "examples" / f"{task_file}.json").read_text())
+    return json.loads((EXAMPLES_DIR / f"{task_file}.json").read_text())
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -375,7 +380,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "example",
         nargs="?",
-        default="goblin_scimitar_attack",
+        default=None,
         help="Example name to run, or 'all' to run every registered demo",
     )
     parser.add_argument(
@@ -602,7 +607,7 @@ def render_all_summaries(batch_payload: dict[str, Any]) -> str:
 
 def main() -> None:
     args = parse_args(sys.argv[1:])
-    example_name = args.example
+    example_name = args.example or DEFAULT_EXAMPLE_NAME
     if example_name == "all":
         payload = run_all_demos()
         if args.as_json:

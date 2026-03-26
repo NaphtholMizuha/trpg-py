@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from trpg_py.store import keys as list_state_keys
@@ -39,17 +40,24 @@ class FetchKeysTool(BaseTool):
     state_provider: Callable[[], Any] | None = Field(default=None, exclude=True)
 
     def _run(self, prefix: str | None = None) -> dict[str, Any]:
+        _log_fetch_keys_input(prefix=prefix)
         try:
             state = self._resolve_state()
             paths = list_state_keys(state, prefix=prefix)
             if not paths:
-                return FetchKeysResult(status="no_match").model_dump(exclude_none=True)
-            return FetchKeysResult(status="ok", items=paths).model_dump(exclude_none=True)
+                result = FetchKeysResult(status="no_match")
+                _log_fetch_keys_output(result)
+                return result.model_dump(exclude_none=True)
+            result = FetchKeysResult(status="ok", items=paths)
+            _log_fetch_keys_output(result)
+            return result.model_dump(exclude_none=True)
         except Exception as exc:
-            return FetchKeysResult(
+            result = FetchKeysResult(
                 status="error",
                 error=FetchKeysError(type=exc.__class__.__name__, message=str(exc)),
-            ).model_dump(exclude_none=True)
+            )
+            _log_fetch_keys_output(result)
+            return result.model_dump(exclude_none=True)
 
     def _resolve_state(self) -> Any:
         if self.state_provider is not None:
@@ -63,3 +71,25 @@ def create_fetch_keys_tool(
     state_provider: Callable[[], Any] | None = None,
 ) -> FetchKeysTool:
     return FetchKeysTool(state={} if state is None else state, state_provider=state_provider)
+
+
+def _log_fetch_keys_input(*, prefix: str | None) -> None:
+    logger.info("tool_input tool=fetch_keys prefix={!r}", prefix)
+
+
+def _log_fetch_keys_output(result: FetchKeysResult) -> None:
+    if result.status == "ok":
+        logger.info(
+            "tool_output tool=fetch_keys status=ok items={} sample_paths={}",
+            len(result.items),
+            result.items[:3],
+        )
+        return
+    if result.status == "no_match":
+        logger.info("tool_output tool=fetch_keys status=no_match items=0")
+        return
+    logger.error(
+        "tool_output tool=fetch_keys status=error error_type={} error_message={!r}",
+        result.error.type if result.error else "unknown",
+        result.error.message if result.error else "",
+    )
