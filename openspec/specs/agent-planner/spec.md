@@ -348,3 +348,41 @@ planner 必须支持把 instruction、context、policy、tool budget 和 repair 
 - **那么** 若 `lint` 返回非法结果，planner 必须根据错误结果修复文档或转入 `needs_human/blocked`
 - **那么** 若 `lint` 返回合法结果，planner 才可以继续进入最终 `ready` 输出流程
 
+### 需求:planner prompt 必须显式保留 DnD5e 攻击中的 nat 标签语义
+系统必须让 planner 默认 prompt 在 DnD5e 攻击规划语境下显式指导模型为 `check.attack` 保留 `tags=["nat"]` 或等价的天然骰追踪语义。系统禁止继续让模型仅生成“可命中判定”的最小攻击检定步骤，却遗漏天然 20 / 天然 1 对攻击结果的规则语义。
+
+#### 场景:planner 规划一次 DnD5e 武器攻击
+- **当** planner 需要把一次近战或远程武器攻击规划为 `check.attack`
+- **那么** prompt 必须明确提示攻击检定默认保留 `nat` 标签语义
+- **那么** prompt 中的攻击模式或 canonical example 必须出现带 `tags=["nat"]` 的 `check.attack`
+- **那么** 模型不会把天然 20 退化为普通 `success`
+
+### 需求:planner prompt 必须显式传播攻击暴击到 damage.apply
+系统必须让 planner 默认 prompt 在攻击后续包含 `damage.apply` 时，显式指导模型把前序攻击步骤的 `crit_success` 结果传播为伤害步骤的 `is_critical` 输入。系统禁止继续让 prompt 只要求“命中后造成伤害”，却遗漏暴击扩骰所需的显式链路。
+
+#### 场景:planner 规划一次攻击命中后的伤害步骤
+- **当** planner 为一次 `check.attack` 生成后续 `damage.apply`
+- **那么** prompt 必须明确提示该伤害步骤在命中时执行，并在暴击时设置 `is_critical`
+- **那么** prompt 中的示例必须展示从 `result.<attack-step>.outcome == crit_success` 到 `is_critical` 的映射
+- **那么** 模型可以生成保留 DnD5e 暴击扩骰语义的伤害步骤
+
+### 需求:planner prompt 必须显式区分工具路径与 TaskDocument 引用路径
+系统必须让 planner 默认 prompt 明确区分两套路径语义：`fetch_keys` 与 `reads` 消费的是当前 store 的裸点路径（如 `actors.aldera.ac`），而最终 `TaskDocument` 中的 `$ref` 使用 `state.*`、`context.*`、`result.*` 命名空间。系统禁止继续让 prompt 把这两类路径语法混为一谈，导致模型把 `state.` 前缀误用于工具参数。
+
+#### 场景:planner 使用 fetch_keys 和 reads 时采用裸 store 路径
+- **当** planner 需要发现 actor、AC、HP、攻击加值或其他 state 路径
+- **那么** prompt 必须告诉模型向 `fetch_keys` 与 `reads` 传入裸 store 路径
+- **那么** 路径示例必须使用 `actors.goblin_1.ac`、`actors.aldera.hp` 等形式
+- **那么** prompt 不得把 `state.actors...` 当作工具参数示例
+
+#### 场景:planner 在 TaskDocument 中继续使用命名空间引用
+- **当** planner 已经通过工具确认了真实 store 路径并准备输出 `TaskDocument`
+- **那么** prompt 必须告诉模型在 `$ref` 中使用 `state.<store-path>` 形式引用 state
+- **那么** prompt 必须保留 `context.*`、`state.*`、`result.*` 等命名空间引用约定
+- **那么** 模型可以区分“工具输入路径”和“最终文档引用路径”不是同一种字符串
+
+#### 场景:prompt 示例展示从工具路径到最终引用的映射关系
+- **当** prompt 提供 canonical example、工具说明或路径示例
+- **那么** 相邻内容中必须可见从 `actors...` 裸路径到 `state.actors...` 引用路径的对应关系
+- **那么** 开发者和模型都可以看出 planner 应先用工具确认真实路径，再把该路径写入最终 `$ref`
+

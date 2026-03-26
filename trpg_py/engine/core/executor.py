@@ -19,7 +19,7 @@ from trpg_py.engine.core.models import (
     TaskStep,
 )
 from trpg_py.engine.core.refs import collect_refs, resolve_value
-from trpg_py.errors import ExecutionError, ValidationError
+from trpg_py.errors import DiceError, ExecutionError, ValidationError
 from trpg_py.store import read, write
 from trpg_py.store.compat import has_path
 
@@ -205,9 +205,9 @@ def _validate_step_semantics(
         unsupported = {str(tag) for tag in tags if str(tag) not in SUPPORTED_CHECK_TAGS}
         if unsupported:
             raise ValidationError(f"Step {step_id!r} uses unsupported check tags: {sorted(unsupported)!r}")
-        if "dice" not in args or not isinstance(args["dice"], str):
+        if "dice" not in args:
             raise ValidationError(f"Check step {step_id!r} must define a dice string")
-        parse_dice_spec(args["dice"])
+        _validate_dice_spec(step_id, "dice", args["dice"])
         if "formula" in args:
             raise ValidationError(f"Check step {step_id!r} cannot use a formula string")
         if kind == "attack":
@@ -237,7 +237,7 @@ def _validate_step_semantics(
                 if not isinstance(component, dict):
                     raise ValidationError(f"Step {step_id!r} {key!r} component must be an object")
                 if "dice" in component and component["dice"] is not None:
-                    parse_dice_spec(component["dice"])
+                    _validate_dice_spec(step_id, f"{key} component dice", component["dice"])
 
     if step_type == "select":
         _validate_field_map(step_id, args)
@@ -293,3 +293,12 @@ def _validate_path_like_args(step_id: str, args: dict[str, Any], keys: tuple[str
         if isinstance(value, (str, dict)):
             continue
         raise ValidationError(f"Step {step_id!r} {key!r} must be a string or object mapping")
+
+
+def _validate_dice_spec(step_id: str, field_name: str, spec: Any) -> None:
+    if not isinstance(spec, str):
+        raise ValidationError(f"Step {step_id!r} {field_name} must be a dice string")
+    try:
+        parse_dice_spec(spec)
+    except DiceError as exc:
+        raise ValidationError(f"Step {step_id!r} {field_name} has invalid dice spec {spec!r}") from exc

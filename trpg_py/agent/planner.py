@@ -23,7 +23,7 @@ from trpg_py.agent.tools import (
     create_search_tool,
 )
 from trpg_py.config import ProjectConfig, load_project_config, resolve_path_from_config
-from trpg_py.errors import ValidationError
+from trpg_py.errors import DiceError, ValidationError
 
 
 class PlannerQuestion(BaseModel):
@@ -186,7 +186,7 @@ class Planner:
                     self._validate_ready_task_document(result.task_document)
                 result.debug = self._build_debug_info(planner_request, attempts=debug_attempts)
                 return result
-            except (PydanticValidationError, ValidationError, ValueError) as exc:
+            except (PydanticValidationError, ValidationError, DiceError, ValueError, TypeError) as exc:
                 last_validation_error = exc
                 if debug_attempts:
                     debug_attempts[-1].validation_error = str(exc)

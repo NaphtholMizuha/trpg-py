@@ -4,12 +4,13 @@ import io
 import json
 import tempfile
 import unittest
+from copy import deepcopy
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smoke import test_linter, test_planner, test_reads, test_search
+from smoke import test_linter, test_planner, test_planner_engine, test_reads, test_search
 from tests.config_helpers import write_project_config
 from trpg_py.config import DEFAULT_PROJECT_CONFIG_PATH
 
@@ -87,6 +88,14 @@ class FakePlanner:
         return SimpleNamespace(model_dump=lambda exclude_none=True: next_payload)
 
 
+class FakeExecutionReport:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def to_dict(self) -> dict[str, object]:
+        return self.payload
+
+
 def run_planner_script(
     *args: str,
     planner_payload: dict[str, object] | list[dict[str, object]] | None = None,
@@ -115,6 +124,115 @@ def run_planner_script(
         raise AssertionError(f"planner smoke script returned unexpected code: {raise_code}")
     if "planner" in created:
         captured["planner"] = created["planner"]
+    return buffer.getvalue(), captured
+
+
+def _default_execution_payload() -> dict[str, object]:
+    return {
+        "task_id": "goblin_scimitar_attack",
+        "status": "success",
+        "step_reports": [
+            {
+                "id": "attack_roll",
+                "type": "check",
+                "kind": "attack",
+                "status": "success",
+                "outputs": {
+                    "outcome": "success",
+                    "total": 16,
+                    "natural": 12,
+                    "roll_mode": "normal",
+                    "chosen": 12,
+                    "modifier": 4,
+                    "threshold": 16,
+                    "rolls": [12],
+                    "target_ids": ["aldera"],
+                },
+            },
+            {
+                "id": "apply_damage",
+                "type": "damage",
+                "kind": "apply",
+                "status": "success",
+                "outputs": {
+                    "per_target": {
+                        "aldera": {
+                            "final_total": 6,
+                            "multiplier": 1,
+                            "base_total": 6,
+                            "components": [
+                                {
+                                    "dice": "1d6",
+                                    "bonus": 2,
+                                    "damage_type": "slashing",
+                                    "rolls": [4],
+                                    "total": 6,
+                                }
+                            ],
+                        }
+                    }
+                },
+            },
+        ],
+        "results": {},
+        "applied_changes": [
+            {
+                "path": "actors.aldera.hp.current",
+                "old_value": 30,
+                "new_value": 24,
+                "mode": "set",
+            }
+        ],
+        "error": None,
+    }
+
+
+def run_planner_engine_script(
+    *args: str,
+    planner_payload: dict[str, object] | list[dict[str, object]] | None = None,
+    planner_error: Exception | None = None,
+    create_error: Exception | None = None,
+    execute_payload: dict[str, object] | None = None,
+    execute_error: Exception | None = None,
+    user_inputs: list[str] | None = None,
+) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    captured: dict[str, object] = {}
+    created: dict[str, object] = {}
+    engine_calls: list[dict[str, object]] = []
+
+    def fake_create_planner(**kwargs: object) -> FakePlanner:
+        captured.update(kwargs)
+        if create_error is not None:
+            raise create_error
+        planner = FakePlanner(payload=planner_payload, error=planner_error)
+        created["planner"] = planner
+        return planner
+
+    def fake_execute_task(task_document: object, state: object, *, roller: object) -> FakeExecutionReport:
+        engine_calls.append(
+            {
+                "task_document": deepcopy(task_document),
+                "state": deepcopy(state),
+                "roller": roller,
+            }
+        )
+        if execute_error is not None:
+            raise execute_error
+        return FakeExecutionReport(execute_payload or _default_execution_payload())
+
+    with patch("smoke.test_planner_engine.create_planner", side_effect=fake_create_planner):
+        with patch("smoke.test_planner_engine.execute_task", side_effect=fake_execute_task):
+            with patch("sys.argv", ["test_planner_engine.py", *args]):
+                with patch("builtins.input", side_effect=list(user_inputs or [])):
+                    with redirect_stdout(buffer):
+                        raise_code = test_planner_engine.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"planner+engine smoke script returned unexpected code: {raise_code}")
+    if "planner" in created:
+        captured["planner"] = created["planner"]
+    if engine_calls:
+        captured["engine_calls"] = engine_calls
     return buffer.getvalue(), captured
 
 
@@ -404,3 +522,112 @@ class SmokePlannerScriptTests(unittest.TestCase):
         self.assertIn("failure    : schema_or_semantic_validation", output)
         self.assertIn("detail     : Unsupported step type 'oops'", output)
         self.assertIn("debug_try  : 1", output)
+
+
+class SmokePlannerEngineScriptTests(unittest.TestCase):
+    def test_planner_engine_smoke_script_executes_ready_task_and_returns_json(self) -> None:
+        output, captured = run_planner_engine_script(
+            "--json",
+            planner_payload={
+                "status": "ready",
+                "task_document": {"task_id": "goblin_scimitar_attack", "steps": [{}, {}]},
+            },
+        )
+        payload = json.loads(output)
+
+        self.assertEqual("ready", payload["planner"]["status"])
+        self.assertEqual("success", payload["execution"]["report"]["status"])
+        self.assertEqual([20, 4, 4, 4, 4], payload["rolls"])
+        self.assertEqual("goblin_scimitar_attack", captured["engine_calls"][0]["task_document"]["task_id"])
+
+    def test_planner_engine_smoke_script_resumes_hitl_before_execution(self) -> None:
+        output, captured = run_planner_engine_script(
+            planner_payload=[
+                {
+                    "status": "needs_human",
+                    "questions": [{"question": "Approve the tool call?", "options": ["approve", "reject"]}],
+                    "missing_info": ["human_review"],
+                    "resume": {"thread_id": "thread-hitl"},
+                },
+                {
+                    "status": "ready",
+                    "task_document": {"task_id": "goblin_scimitar_attack", "steps": [{}]},
+                },
+            ],
+            user_inputs=["approve"],
+        )
+
+        self.assertIn("hitl       : waiting for user input", output)
+        self.assertIn("Planner Stage", output)
+        self.assertIn("Execution Stage", output)
+        self.assertEqual(2, len(captured["planner"].calls))
+        resumed_request = captured["planner"].calls[1]
+        self.assertEqual("thread-hitl", resumed_request.thread_id)
+        self.assertEqual({"decisions": [{"type": "approve"}]}, resumed_request.resume)
+        self.assertEqual(1, len(captured["engine_calls"]))
+
+    def test_planner_engine_smoke_script_does_not_execute_when_planner_blocked(self) -> None:
+        output, captured = run_planner_engine_script(
+            planner_payload={
+                "status": "blocked",
+                "error": {"type": "RuntimeError", "message": "planner backend unavailable"},
+            },
+        )
+
+        self.assertIn("Planner Stage", output)
+        self.assertIn("blocked", output)
+        self.assertNotIn("engine_calls", captured)
+
+    def test_planner_engine_smoke_script_stops_when_tester_quits_hitl(self) -> None:
+        output, captured = run_planner_engine_script(
+            planner_payload={
+                "status": "needs_human",
+                "questions": [{"question": "Approve the tool call?"}],
+                "missing_info": ["human_review"],
+                "resume": {"thread_id": "thread-hitl"},
+            },
+            user_inputs=["quit"],
+        )
+
+        self.assertIn("hitl       : stopped by user", output)
+        self.assertNotIn("engine_calls", captured)
+
+    def test_planner_engine_smoke_script_prints_human_readable_stage_and_changes(self) -> None:
+        output, _ = run_planner_engine_script(
+            planner_payload={
+                "status": "ready",
+                "task_document": {"task_id": "goblin_scimitar_attack", "steps": [{}, {}]},
+            },
+        )
+
+        self.assertIn("TRPG Planner + Engine Smoke Test", output)
+        self.assertIn("Planner Stage", output)
+        self.assertIn("Execution Stage", output)
+        self.assertIn("Applied Changes", output)
+        self.assertIn("actors.aldera.hp.current", output)
+
+    def test_planner_engine_smoke_script_prints_critical_attack_summary(self) -> None:
+        crit_execution_payload = _default_execution_payload()
+        crit_execution_payload["step_reports"][0]["outputs"]["outcome"] = "crit_success"
+        crit_execution_payload["step_reports"][0]["outputs"]["total"] = 24
+        crit_execution_payload["step_reports"][0]["outputs"]["natural"] = 20
+        crit_execution_payload["step_reports"][0]["outputs"]["chosen"] = 20
+        crit_execution_payload["step_reports"][0]["outputs"]["rolls"] = [20]
+        crit_execution_payload["step_reports"][1]["outputs"]["per_target"]["aldera"]["final_total"] = 10
+        crit_execution_payload["step_reports"][1]["outputs"]["per_target"]["aldera"]["base_total"] = 10
+        crit_execution_payload["step_reports"][1]["outputs"]["per_target"]["aldera"]["components"][0]["rolls"] = [4, 4]
+        crit_execution_payload["step_reports"][1]["outputs"]["per_target"]["aldera"]["components"][0]["total"] = 10
+        crit_execution_payload["applied_changes"][0]["new_value"] = 20
+
+        output, _ = run_planner_engine_script(
+            planner_payload={
+                "status": "ready",
+                "task_document": {"task_id": "goblin_scimitar_attack", "steps": [{}, {}]},
+            },
+            execute_payload=crit_execution_payload,
+        )
+
+        self.assertIn("crit_success", output)
+        self.assertIn("[4, 4]", output)
+        self.assertIn("actors.aldera.hp.current", output)
+        self.assertIn("30 -> 20", output)

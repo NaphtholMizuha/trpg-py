@@ -34,16 +34,28 @@ Reference rules:
 - A step may only reference results from earlier steps.
 - Use "when" for conditional execution.
 
+Path semantics:
+- fetch_keys and reads use bare store paths such as actors.goblin_1.ac, actors.aldera.hp, or actors.goblin_1.attacks.scimitar.to_hit.
+- Do not pass state.actors.goblin_1.ac directly to fetch_keys or reads.
+- TaskDocument $ref values keep engine namespaces, so the matching reference form is state.actors.goblin_1.ac.
+- Think of this as: tool path actors.goblin_1.ac -> TaskDocument $ref state.actors.goblin_1.ac.
+
 Tool responsibilities:
 - Use search for rule evidence.
-- Use fetch_keys to discover candidate state paths.
-- Use reads to confirm the current values on a small set of candidate paths, such as actor ids, AC, HP, resources, or spell slots.
+- Use fetch_keys to discover candidate bare store paths.
+- Use reads to confirm the current values on a small set of candidate bare store paths, such as actor ids, AC, HP, resources, or spell slots.
 - Use lint to validate a candidate TaskDocument before returning status ready.
+
+DnD5e attack reminder:
+- Do not treat a natural 20 attack as an ordinary success if the plan can preserve nat semantics.
+- Prefer `check.attack` with `tags=["nat"]` so the engine can emit `crit_success` or `crit_fail`.
+- When a follow-up `damage.apply` depends on that attack, prefer an explicit `is_critical` mapping from the attack outcome.
 
 Attack planning pattern:
 1. Optionally select targets.
-2. Create a check.attack step.
-3. Create a damage.apply step gated by the attack result.
+2. For DnD5e weapon or spell attacks, create a `check.attack` step that keeps `tags=["nat"]` so natural 20 and natural 1 remain visible to later steps.
+3. Create a `damage.apply` step gated by the attack result.
+4. If that damage comes from the attack roll, map `result.attack_roll.outcome == crit_success` into `damage.apply.is_critical` so a critical hit expands damage dice instead of acting like a normal hit.
 
 Do not invent substitute step fields such as action, actor, target, rule, or description in place of id/type/kind/args.
 
@@ -130,6 +142,11 @@ Canonical example:
   ]
 }
 
+Tool-path example before writing the final TaskDocument:
+- fetch_keys prefix: actors
+- reads paths: ["actors.goblin_1.attacks.scimitar.to_hit", "actors.aldera.ac"]
+- final TaskDocument refs: {"$ref": "state.actors.goblin_1.attacks.scimitar.to_hit"} and {"$ref": "state.actors.aldera.ac"}
+
 DM instruction:
 {{instruction}}
 
@@ -141,8 +158,10 @@ Policy JSON:
 
 Tool budget hint: {{tool_budget}}
 
-Use search for rule evidence and fetch_keys for state-path discovery before asking the DM.
-Use reads when path values are needed to confirm entity ids or key combat values.
+Use `search` for rule evidence and fetch_keys for bare store-path discovery before asking the DM.
+Use `reads` when bare store-path values are needed to confirm entity ids or key combat values.
+Do not pass state.* references directly into `fetch_keys` or `reads`.
+When you write the final TaskDocument, convert a confirmed tool path like actors.aldera.ac into the $ref form state.actors.aldera.ac.
 Use lint to validate a candidate TaskDocument before returning status ready.
 
 If information is insufficient, return status needs_human with questions, missing_info, and assumptions.

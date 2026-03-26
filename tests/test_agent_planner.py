@@ -215,12 +215,58 @@ class PlannerTests(unittest.TestCase):
         user_prompt = agent_factory.agent.calls[0]["input"]["messages"][0]["content"]
         self.assertIn("use lint to validate your candidate TaskDocument", system_prompt)
         self.assertIn("Use reads when you know or can discover promising state paths", system_prompt)
+        self.assertIn("For `fetch_keys` and reads, use bare store paths like actors.aldera.ac.", system_prompt)
+        self.assertIn("Reserve state., context., and result. namespaces for TaskDocument $ref values only.", system_prompt)
         self.assertIn("TaskDocument minimal shape", user_prompt)
         self.assertIn("Use reads to confirm the current values", user_prompt)
         self.assertIn("Allowed type/kind pairs", user_prompt)
         self.assertIn("Do not invent substitute step fields", user_prompt)
         self.assertIn("Canonical example", user_prompt)
         self.assertIn("Use lint to validate a candidate TaskDocument", user_prompt)
+        self.assertIn("fetch_keys and reads use bare store paths such as actors.goblin_1.ac", user_prompt)
+        self.assertIn("Do not pass state.actors.goblin_1.ac directly to fetch_keys or reads.", user_prompt)
+        self.assertIn("tool path actors.goblin_1.ac -> TaskDocument $ref state.actors.goblin_1.ac", user_prompt)
+        self.assertIn('reads paths: ["actors.goblin_1.attacks.scimitar.to_hit", "actors.aldera.ac"]', user_prompt)
+        self.assertIn("Do not pass state.* references directly into `fetch_keys` or `reads`.", user_prompt)
+        self.assertIn("convert a confirmed tool path like actors.aldera.ac into the $ref form state.actors.aldera.ac", user_prompt)
+        self.assertIn('tags=["nat"]', system_prompt)
+        self.assertIn('tags=["nat"]', user_prompt)
+        self.assertIn("Do not treat a natural 20 attack as an ordinary success", user_prompt)
+        self.assertIn("result.attack_roll.outcome == crit_success", user_prompt)
+        self.assertIn("damage.apply.is_critical", user_prompt)
+
+    @patch.dict(
+        os.environ,
+        {"LINGYA_API_KEY": "planner-key", "SILICONFLOW_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_default_prompt_templates_do_not_use_state_namespace_as_tool_examples(self) -> None:
+        agent_factory = FakeAgentFactory(
+            responses=[
+                {
+                    "structured_response": {
+                        "status": "needs_human",
+                        "questions": [{"question": "Need more target detail"}],
+                    }
+                }
+            ]
+        )
+        planner = create_planner(
+            config_path=str(DEFAULT_PROJECT_CONFIG_PATH),
+            search_tool=DummyTool("search"),
+            fetch_keys_tool=DummyTool("fetch_keys"),
+            reads_tool=DummyTool("reads"),
+            lint_tool=DummyTool("lint"),
+            model_builder=lambda config: "fake-model",
+            agent_factory=agent_factory,
+        )
+
+        planner.plan({"instruction": "Goblin attacks hero_1"})
+
+        user_prompt = agent_factory.agent.calls[0]["input"]["messages"][0]["content"]
+        self.assertNotIn("fetch_keys prefix: state.actors", user_prompt)
+        self.assertNotIn('reads paths: ["state.actors.goblin_1.attacks.scimitar.to_hit"', user_prompt)
+        self.assertNotIn("Use fetch_keys to discover candidate state.actors paths", user_prompt)
 
     @patch.dict(
         os.environ,
@@ -523,6 +569,57 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("Field required", result.debug.failure_message)
         self.assertEqual(1, len(result.debug.attempts))
         self.assertIn("Field required", result.debug.attempts[0].validation_error)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_plan_treats_non_string_damage_dice_as_repairable_validation_failure(self) -> None:
+        invalid_document = {
+            "task_id": "broken_damage",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "attack_roll",
+                    "type": "check",
+                    "kind": "attack",
+                    "args": {"dice": "1d20", "modifier": 4, "target_id": "hero_1", "target_ac": 16},
+                    "tags": ["nat"],
+                },
+                {
+                    "id": "apply_damage",
+                    "type": "damage",
+                    "kind": "apply",
+                    "args": {
+                        "targets": ["hero_1"],
+                        "damage": [{"dice": {"count": 1, "sides": 6}, "bonus": 2, "damage_type": "slashing"}],
+                    },
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                max_planning_rounds=1,
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=FakeAgentFactory(
+                    responses=[{"structured_response": {"status": "ready", "task_document": invalid_document}}]
+                ),
+            )
+
+            result = planner.plan({"instruction": "Attack something", "debug": True})
+
+        self.assertEqual("needs_human", result.status)
+        self.assertEqual("task_document_validation", result.reason)
+        self.assertIsNotNone(result.debug)
+        self.assertEqual("schema_or_semantic_validation", result.debug.failure_stage)
+        self.assertIn("damage component dice must be a dice string", result.debug.failure_message)
+        self.assertEqual(1, len(result.debug.attempts))
+        self.assertIn("damage component dice must be a dice string", result.debug.attempts[0].validation_error)
 
     @patch.dict(
         os.environ,

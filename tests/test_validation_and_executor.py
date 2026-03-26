@@ -122,6 +122,27 @@ class ValidationAndExecutorTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_task_document(document)
 
+    def test_non_string_damage_component_dice_is_rejected(self) -> None:
+        document = {
+            "task_id": "bad_damage_dice",
+            "version": 1,
+            "steps": [
+                {
+                    "id": "apply_damage",
+                    "type": "damage",
+                    "kind": "apply",
+                    "args": {
+                        "targets": ["hero_1"],
+                        "damage": [{"dice": {"count": 1, "sides": 6}, "bonus": 2, "damage_type": "slashing"}],
+                    },
+                }
+            ],
+        }
+        with self.assertRaises(ValidationError) as ctx:
+            validate_task_document(document)
+
+        self.assertIn("damage component dice must be a dice string", str(ctx.exception))
+
     def test_targeting_requires_required_keys(self) -> None:
         document = {
             "task_id": "bad_targeting",
