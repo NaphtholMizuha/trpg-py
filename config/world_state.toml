@@ -2,11 +2,28 @@
 "actors.goblin_1.name" = "洞穴哥布林斥候"
 "actors.goblin_1.side" = "enemy"
 "actors.goblin_1.alive" = true
-"actors.goblin_1.position" = { x = 1, y = 1 }
+"actors.goblin_1.creature_type" = "类人生物"
+"actors.goblin_1.species" = "地精"
+"actors.goblin_1.size" = "小型"
+"actors.goblin_1.challenge_rating" = "1/4"
+"actors.goblin_1.proficiency_bonus" = 2
+"actors.goblin_1.position" = { x = 4, y = 10 }
+"actors.goblin_1.facing" = "west"
 "actors.goblin_1.ac" = 13
-"actors.goblin_1.hp" = { current = 7, max = 7 }
+"actors.goblin_1.ac_breakdown" = "皮甲11 + 敏捷2"
+"actors.goblin_1.hp" = { current = 7, max = 7, temporary = 0 }
 "actors.goblin_1.speed" = 30
-"actors.goblin_1.notes" = "擅长近战骚扰，偏好先用弯刀贴身攻击。"
+"actors.goblin_1.senses.darkvision" = 60
+"actors.goblin_1.languages" = ["通用语", "地精语"]
+"actors.goblin_1.skills.stealth" = 6
+"actors.goblin_1.traits" = ["nimble_escape"]
+"actors.goblin_1.notes" = "擅长近战骚扰，偏好先用弯刀贴身攻击，必要时用敏捷脱离。"
+"actors.goblin_1.abilities.str" = { score = 8, modifier = -1, save = -1 }
+"actors.goblin_1.abilities.dex" = { score = 14, modifier = 2, save = 2 }
+"actors.goblin_1.abilities.con" = { score = 10, modifier = 0, save = 0 }
+"actors.goblin_1.abilities.int" = { score = 10, modifier = 0, save = 0 }
+"actors.goblin_1.abilities.wis" = { score = 8, modifier = -1, save = -1 }
+"actors.goblin_1.abilities.cha" = { score = 8, modifier = -1, save = -1 }
 "actors.goblin_1.attacks.scimitar.label" = "弯刀"
 "actors.goblin_1.attacks.scimitar.to_hit" = 4
 "actors.goblin_1.attacks.scimitar.reach" = 5
@@ -16,19 +33,56 @@
 "actors.goblin_1.attacks.shortbow.range" = "80/320"
 "actors.goblin_1.attacks.shortbow.damage" = [{ dice = "1d6", bonus = 2, damage_type = "piercing" }]
 
-"actors.hero_1.id" = "hero_1"
-"actors.hero_1.name" = "艾尔德拉"
-"actors.hero_1.side" = "player"
-"actors.hero_1.alive" = true
-"actors.hero_1.position" = { x = 1, y = 2 }
-"actors.hero_1.ac" = 16
-"actors.hero_1.hp" = { current = 20, max = 20 }
-"actors.hero_1.speed" = 30
-"actors.hero_1.class_summary" = "圣武士 5 级"
-"actors.hero_1.weapon.main_hand" = "长剑"
-"actors.hero_1.notes" = "正与哥布林近战缠斗。"
+"actors.aldera.id" = "aldera"
+"actors.aldera.name" = "艾尔德拉·银誓"
+"actors.aldera.side" = "player"
+"actors.aldera.alive" = true
+"actors.aldera.species" = "高等精灵"
+"actors.aldera.class_summary" = "远古之誓圣武士 5级"
+"actors.aldera.alignment" = "守序善良"
+"actors.aldera.player_name" = "张三"
+"actors.aldera.xp" = 6500
+"actors.aldera.proficiency_bonus" = 3
+"actors.aldera.position" = { x = 5, y = 10 }
+"actors.aldera.facing" = "east"
+"actors.aldera.ac" = 18
+"actors.aldera.ac_breakdown" = "链甲16 + 盾牌2 + 防护戒指1 + 防御风格1"
+"actors.aldera.hp" = { current = 30, max = 44, temporary = 0 }
+"actors.aldera.speed" = 30
+"actors.aldera.initiative_modifier" = 1
+"actors.aldera.hit_dice" = { dice = "5d10", remaining = 5, total = 5 }
+"actors.aldera.condition_summary" = "轻伤"
+"actors.aldera.reaction_available" = true
+"actors.aldera.bonus_action_available" = true
+"actors.aldera.cover" = "无"
+"actors.aldera.senses.darkvision" = 60
+"actors.aldera.save_advantages" = ["抗魅惑豁免优势（精灵血统）"]
+"actors.aldera.abilities.str" = { score = 16, modifier = 3, save = 6, proficient = true }
+"actors.aldera.abilities.dex" = { score = 12, modifier = 1, save = 1, proficient = false }
+"actors.aldera.abilities.con" = { score = 19, base_score = 14, modifier = 4, save = 2, proficient = false, source = "健康护符同调" }
+"actors.aldera.abilities.int" = { score = 10, modifier = 0, save = 0, proficient = false }
+"actors.aldera.abilities.wis" = { score = 13, modifier = 1, save = 4, proficient = true }
+"actors.aldera.abilities.cha" = { score = 18, modifier = 4, save = 7, proficient = true }
+"actors.aldera.equipment.main_hand" = { name = "+1长剑", damage = "1d8+4", attack_bonus = 7 }
+"actors.aldera.equipment.off_hand" = { name = "精钢盾", ac_bonus = 2 }
+"actors.aldera.equipment.armor" = { name = "链甲", base_ac = 16 }
+"actors.aldera.equipment.ring" = { name = "防护戒指", ac_bonus = 1 }
+"actors.aldera.equipment.amulet" = { name = "健康护符", con_bonus = 4 }
+"actors.aldera.equipment.other" = ["探险家套组", "圣徽(盾牌)", "100gp"]
+"actors.aldera.features.class" = ["神圣感知", "圣疗", "神圣誓言(远古)", "战斗风格(防御)", "施法(圣武士)", "破邪斩(2d8)", "神佑"]
+"actors.aldera.features.racial" = ["黑暗视觉", "精灵血统", "敏锐感官", "出神"]
+"actors.aldera.resources.lay_on_hands" = { current = 25, max = 25 }
+"actors.aldera.spell_slots.level_1" = { current = 4, max = 4 }
+"actors.aldera.spell_slots.level_2" = { current = 2, max = 2 }
+"actors.aldera.spells.cantrips" = ["圣火术"]
+"actors.aldera.spells.level_1" = ["回复术", "神恩", "护盾术", "圣光术"]
+"actors.aldera.spells.level_2" = ["迷雾步", "branding smite"]
+"actors.aldera.spell_dc" = 15
+"actors.aldera.spell_attack_bonus" = 7
+"actors.aldera.weapon.main_hand" = "+1长剑"
+"actors.aldera.notes" = "艾尔德拉正与哥布林近战缠斗，仍保有反应和附赠动作。"
 
 "environment.scene" = "地下遗迹休整间隙"
 "environment.lighting" = "火把照明"
 "environment.mood" = "短暂喘息，仍可听见远处战斗声"
-"environment.encounter_summary" = "哥布林斥候已经逼近 hero_1，双方处于近战距离。"
+"environment.encounter_summary" = "哥布林斥候已经逼近 aldera，双方处于近战距离。"

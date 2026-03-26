@@ -28,7 +28,7 @@ from trpg_py.config import DEFAULT_PROJECT_CONFIG_PATH, load_project_config, res
 from trpg_py.store.compat import set_path
 
 
-DEFAULT_INSTRUCTION = "哥布林用弯刀攻击 hero_1"
+DEFAULT_INSTRUCTION = "哥布林用弯刀攻击 aldera"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -218,7 +218,7 @@ def print_human_result(
     print("=" * 72)
     print(f"instruction: {instruction}")
     print(f"config     : {config_path}")
-    print("tools      : search=real, fetch_keys=real, lint=real")
+    print("tools      : search=real, fetch_keys=real, reads=real, lint=real")
     if thread_id:
         print(f"thread_id  : {thread_id}")
     if resumed:

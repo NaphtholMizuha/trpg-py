@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smoke import test_linter, test_planner, test_search
+from smoke import test_linter, test_planner, test_reads, test_search
 from tests.config_helpers import write_project_config
 from trpg_py.config import DEFAULT_PROJECT_CONFIG_PATH
 
@@ -50,6 +50,19 @@ def run_linter_script(*args: str) -> tuple[str, dict[str, object]]:
             raise_code = test_linter.main()
     if raise_code not in (None, 0):
         raise AssertionError(f"linter smoke script returned unexpected code: {raise_code}")
+    if "--json" in args:
+        payload = json.loads(buffer.getvalue())
+    return buffer.getvalue(), payload
+
+
+def run_reads_script(*args: str) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    payload: dict[str, object] = {}
+    with patch("sys.argv", ["test_reads.py", *args]):
+        with redirect_stdout(buffer):
+            raise_code = test_reads.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"reads smoke script returned unexpected code: {raise_code}")
     if "--json" in args:
         payload = json.loads(buffer.getvalue())
     return buffer.getvalue(), payload
@@ -131,6 +144,24 @@ class SmokeLinterScriptTests(unittest.TestCase):
         self.assertIn("status     : invalid", output)
 
 
+class SmokeReadsScriptTests(unittest.TestCase):
+    def test_reads_smoke_script_supports_json_output(self) -> None:
+        _, payload = run_reads_script("--json")
+
+        self.assertEqual("ok", payload["match"]["status"])
+        self.assertEqual("no_match", payload["no_match"]["status"])
+        self.assertEqual("aldera", payload["match"]["items"][0]["value"])
+
+    def test_reads_smoke_script_prints_human_summary(self) -> None:
+        output, _ = run_reads_script()
+
+        self.assertIn("TRPG Agent Reads Smoke Test", output)
+        self.assertIn("match demo :", output)
+        self.assertIn("no_match demo:", output)
+        self.assertIn("status     : ok", output)
+        self.assertIn("status     : no_match", output)
+
+
 class SmokePlannerScriptTests(unittest.TestCase):
     def test_planner_smoke_script_uses_real_entrypoint_defaults(self) -> None:
         output, captured = run_planner_script(
@@ -161,7 +192,7 @@ class SmokePlannerScriptTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("tools      : search=real, fetch_keys=real, lint=real", output)
+        self.assertIn("tools      : search=real, fetch_keys=real, reads=real, lint=real", output)
 
     def test_planner_smoke_script_loads_world_state_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

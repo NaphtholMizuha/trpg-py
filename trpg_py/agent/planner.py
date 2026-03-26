@@ -15,9 +15,11 @@ from trpg_py.agent.task_document import TASK_DOCUMENT_OUTPUT_SCHEMA, validate_ca
 from trpg_py.agent.tools import (
     FetchKeysTool,
     LintTool,
+    ReadsTool,
     SearchTool,
     create_fetch_keys_tool,
     create_lint_tool,
+    create_reads_tool,
     create_search_tool,
 )
 from trpg_py.config import ProjectConfig, load_project_config, resolve_path_from_config
@@ -119,12 +121,14 @@ class Planner:
         config: PlannerFactoryConfig,
         search_tool: SearchTool,
         fetch_keys_tool: FetchKeysTool,
+        reads_tool: ReadsTool,
         lint_tool: LintTool,
     ) -> None:
         self.agent = agent
         self.config = config
         self.search_tool = search_tool
         self.fetch_keys_tool = fetch_keys_tool
+        self.reads_tool = reads_tool
         self.lint_tool = lint_tool
 
     def plan(self, request: PlannerRequest | dict[str, Any]) -> PlannerResult:
@@ -423,6 +427,7 @@ def create_planner(
     config_path: str | None = None,
     search_tool: SearchTool | None = None,
     fetch_keys_tool: FetchKeysTool | None = None,
+    reads_tool: ReadsTool | None = None,
     lint_tool: LintTool | None = None,
     state: Any | None = None,
     state_provider: Callable[[], Any] | None = None,
@@ -468,11 +473,12 @@ def create_planner(
         raise ValueError("project_config or config_path is required when search_tool is not provided")
     search = search_tool or create_search_tool(project_config=resolved_project_config, config_path=config_path)
     fetch_keys = fetch_keys_tool or create_fetch_keys_tool(state=state, state_provider=state_provider)
+    reads = reads_tool or create_reads_tool(state=state, state_provider=state_provider)
     lint = lint_tool or create_lint_tool()
     resolved_model = (model_builder or build_planner_model)(config)
     deep_agent = (agent_factory or _load_default_agent_factory())(
         model=resolved_model,
-        tools=[search, fetch_keys, lint],
+        tools=[search, fetch_keys, reads, lint],
         system_prompt=_build_system_prompt(config),
         response_format=PlannerResult,
         checkpointer=_resolve_checkpointer(config, checkpointer),
@@ -483,6 +489,7 @@ def create_planner(
         config=config,
         search_tool=search,
         fetch_keys_tool=fetch_keys,
+        reads_tool=reads,
         lint_tool=lint,
     )
 

@@ -12,6 +12,14 @@ from trpg_py.agent.tools.lint import (
     create_lint_tool,
     lint_task_document,
 )
+from trpg_py.agent.tools.reads import (
+    ReadsInput,
+    ReadsItem,
+    ReadsResult,
+    ReadsTool,
+    create_reads_tool,
+    read_paths,
+)
 from trpg_py.agent.tools.search import (
     FastEmbedSparseEmbedder,
     HTTPReranker,
@@ -32,6 +40,10 @@ __all__ = [
     "LintIssue",
     "LintResult",
     "LintTool",
+    "ReadsInput",
+    "ReadsItem",
+    "ReadsResult",
+    "ReadsTool",
     "FastEmbedSparseEmbedder",
     "HTTPReranker",
     "HybridRuleSearcher",
@@ -41,7 +53,9 @@ __all__ = [
     "SearchTool",
     "create_fetch_keys_tool",
     "create_lint_tool",
+    "create_reads_tool",
     "build_default_searcher",
     "create_search_tool",
     "lint_task_document",
+    "read_paths",
 ]

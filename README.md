@@ -51,9 +51,10 @@ python -B -m unittest discover -s tests -v
 
 - `trpg_py.agent.tools.search`：规则检索
 - `trpg_py.agent.tools.fetch_keys`：状态路径发现
+- `trpg_py.agent.tools.reads`：状态值读取
 - `trpg_py.agent.tools.lint`：候选 `TaskDocument` 只读校验
 
-这三类工具在每次调用时都会通过 `loguru` 自动记录输入和输出摘要，方便排查 planner 或其他 agent 的工具使用情况。
+这四类工具在每次调用时都会通过 `loguru` 自动记录输入和输出摘要，方便排查 planner 或其他 agent 的工具使用情况。
 
 现在还提供一个基于 Deep Agents 的 planner 入口：
 
@@ -131,6 +132,7 @@ python smoke/test_fetch_keys.py
 
 ```bash
 python smoke/test_linter.py --json
+python smoke/test_reads.py --json
 python smoke/test_search.py --json "fireball spell"
 python smoke/test_planner.py --instruction "张三用长剑攻击地精" --json
 ```
@@ -143,7 +145,7 @@ planner smoke 默认 world state 也不再是脚本内联的小字典，而是�
 
 ### Planner
 
-`planner` 的职责是读取 DM 指令，调用 `search` 与 `fetch_keys` 收集证据，并在准备返回 `ready` 前用 `lint` 收口候选文档，然后返回三态结构化结果：
+`planner` 的职责是读取 DM 指令，调用 `search`、`fetch_keys` 与 `reads` 收集证据，并在准备返回 `ready` 前用 `lint` 收口候选文档，然后返回三态结构化结果：
 
 - `ready`：包含可执行 `task_document`
 - `needs_human`：包含结构化问题、`missing_info` 和 `assumptions`

@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+"""
+reads 工具演示脚本
+
+使用方式:
+  python smoke/test_reads.py
+  python smoke/test_reads.py --json
+  python smoke/test_reads.py --path actors.aldera.id --path actors.aldera.ac
+  python smoke/test_reads.py --state-file ./config/world_state.toml
+"""
+
+import argparse
+import json
+import sys
+import tomllib
+from pathlib import Path
+from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from trpg_py.agent.tools import create_reads_tool
+from trpg_py.store.compat import set_path
+
+
+DEFAULT_STATE_FILE = PROJECT_ROOT / "config" / "world_state.toml"
+DEFAULT_PATHS = ["actors.aldera.id", "actors.aldera.ac", "actors.goblin_1.attacks.scimitar.to_hit"]
+DEFAULT_NO_MATCH_PATHS = ["actors.missing_target.id"]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="演示 reads 工具的状态值读取能力")
+    parser.add_argument(
+        "--state-file",
+        default=str(DEFAULT_STATE_FILE),
+        help="状态 TOML 文件路径，默认使用 config/world_state.toml",
+    )
+    parser.add_argument(
+        "--path",
+        action="append",
+        dest="paths",
+        default=None,
+        help="要读取的点路径；可重复传入。未提供时使用默认演示路径。",
+    )
+    parser.add_argument("--json", action="store_true", help="仅输出 JSON 结果")
+    return parser
+
+
+def load_state(path: str | Path) -> dict[str, Any]:
+    payload = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    state: dict[str, Any] = {}
+    for state_path, value in payload.items():
+        set_path(state, state_path, value)
+    return state
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    state_path = Path(args.state_file).expanduser().resolve()
+    paths = list(args.paths or DEFAULT_PATHS)
+
+    state = load_state(state_path)
+    tool = create_reads_tool(state=state)
+    result_match = tool.invoke({"paths": paths})
+    result_no_match = tool.invoke({"paths": DEFAULT_NO_MATCH_PATHS})
+
+    if args.json:
+        payload = {
+            "match": result_match,
+            "no_match": result_no_match,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    print("=" * 72)
+    print("TRPG Agent Reads Smoke Test")
+    print("=" * 72)
+    print(f"state_file : {state_path}")
+    print("match demo :")
+    print_human_result(result_match)
+    print("-" * 72)
+    print("no_match demo:")
+    print_human_result(result_no_match)
+    return 0
+
+
+def print_human_result(result: dict[str, Any]) -> None:
+    status = result.get("status", "unknown")
+    print(f"status     : {status}")
+    if status == "error":
+        error = result.get("error", {})
+        print(f"error      : {error.get('type', 'unknown')} - {error.get('message', '')}")
+        return
+    items = result.get("items", [])
+    if not items:
+        print("items      : (none)")
+        return
+    print(f"items      : {len(items)}")
+    for item in items:
+        path = item.get("path", "")
+        item_status = item.get("status", "unknown")
+        if item_status == "ok":
+            print(f"- {path} = {json.dumps(item.get('value'), ensure_ascii=False)}")
+            continue
+        error = item.get("error", {})
+        print(f"- {path} -> {item_status}: {error.get('message', '')}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

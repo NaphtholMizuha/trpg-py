@@ -34,6 +34,12 @@ Reference rules:
 - A step may only reference results from earlier steps.
 - Use "when" for conditional execution.
 
+Tool responsibilities:
+- Use search for rule evidence.
+- Use fetch_keys to discover candidate state paths.
+- Use reads to confirm the current values on a small set of candidate paths, such as actor ids, AC, HP, resources, or spell slots.
+- Use lint to validate a candidate TaskDocument before returning status ready.
+
 Attack planning pattern:
 1. Optionally select targets.
 2. Create a check.attack step.
@@ -136,6 +142,7 @@ Policy JSON:
 Tool budget hint: {{tool_budget}}
 
 Use search for rule evidence and fetch_keys for state-path discovery before asking the DM.
+Use reads when path values are needed to confirm entity ids or key combat values.
 Use lint to validate a candidate TaskDocument before returning status ready.
 
 If information is insufficient, return status needs_human with questions, missing_info, and assumptions.

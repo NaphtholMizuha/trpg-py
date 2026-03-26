@@ -29,7 +29,7 @@ planner 必须以生成可被执行器消费的 `TaskDocument` 为目标产物�
 - **那么** 该文档可直接进入执行器校验与执行流程
 
 ### 需求:planner 必须通过 search 和 fetch_keys 获取证据
-planner 必须将 `search` 与 `fetch_keys` 作为基础信息工具，并通过工具调用结果驱动后续推理分支。planner 禁止在可调用工具前提下跳过取证直接凭空生成关键规则结论或关键路径引用。
+planner 必须将 `search` 与 `fetch_keys` 作为基础信息工具，并通过工具调用结果驱动后续推理分支。planner 禁止在可调用工具前提下跳过取证直接凭空生成关键规则结论或关键路径引用。对于候选 `TaskDocument` 的合法性收口，planner 必须能够进一步使用 `lint` 工具执行只读自检，但 `lint` 不得替代 `search` 与 `fetch_keys` 的取证职责。
 
 #### 场景:planner 使用 search 补充规则证据
 - **当** DM 指令涉及规则判断（如攻击、豁免、伤害）
@@ -41,8 +41,13 @@ planner 必须将 `search` 与 `fetch_keys` 作为基础信息工具，并通过
 - **那么** planner 可以调用 `fetch_keys` 枚举候选路径
 - **那么** 产出的路径引用与 state 点路径语义保持一致
 
+#### 场景:planner 使用 lint 收口候选文档
+- **当** planner 已具备足够规则证据和状态路径证据并准备返回 `ready`
+- **那么** planner 可以调用 `lint` 对候选 `TaskDocument` 做只读合法性校验
+- **那么** `lint` 的结果只用于校验候选文档，不得被当作规则证据或状态事实来源
+
 ### 需求:planner 必须显式区分 ready、needs_human 与 blocked
-planner 必须以稳定状态语义区分三类规划结果：可直接执行、需要 DM 澄清、以及系统阻塞。系统禁止把这三类情况折叠为单一自由文本回复。
+planner 必须以稳定状态语义区分三类规划结果：可直接执行、需要 DM 澄清、以及系统阻塞。系统禁止把这三类情况折叠为单一自由文本回复。对于 `needs_human` 与 `blocked`，系统还必须暴露可读的根因解释，禁止把内部校验失败或修复未收敛笼统伪装成“用户信息不足”。
 
 #### 场景:信息充分时返回 ready
 - **当** planner 已获得足够证据并完成文档校验
@@ -53,11 +58,18 @@ planner 必须以稳定状态语义区分三类规划结果：可直接执行、
 - **当** planner 判断关键信息不足或不确定性过高
 - **那么** 返回 `status=needs_human`
 - **那么** 返回体包含结构化澄清问题列表
+- **那么** 返回体包含说明当前缺口为何阻止生成稳定文档的解释
 
 #### 场景:系统故障时返回 blocked
 - **当** 工具调用连续失败或依赖不可用导致无法规划
 - **那么** 返回 `status=blocked`
 - **那么** 返回体包含可读错误原因与恢复建议
+
+#### 场景:内部文档校验失败时暴露真实根因
+- **当** planner 生成了结构合法但未通过执行器语义校验的 `TaskDocument` 且修复未收敛
+- **那么** 系统不得仅返回泛化的“请补充关键细节”作为唯一解释
+- **那么** 返回体或调试负载中必须可见最后一次校验失败原因
+- **那么** 调用方可以区分这是内部产物失败而非纯业务信息缺失
 
 ### 需求:planner 必须支持 LLM 主导的不确定性判定并保留最小硬约束
 系统必须允许 planner 由 LLM 主导判断“信息是否足够”，并在不确定时主动触发 HITL。与此同时，系统必须保留最小硬约束用于兜底，例如文档结构非法、关键实体不可唯一映射或关键工具错误等不可忽略风险。
@@ -73,12 +85,17 @@ planner 必须以稳定状态语义区分三类规划结果：可直接执行、
 - **那么** planner 必须转为 `needs_human` 或 `blocked`
 
 ### 需求:planner 输出必须包含可解释的缺口与假设信息
-planner 在 `needs_human` 或存在推断前提时，必须返回结构化 `missing_info` 和 `assumptions` 等解释字段，禁止只返回不可审计的最终结论。
+planner 在 `needs_human` 或存在推断前提时，必须返回结构化 `missing_info` 和 `assumptions` 等解释字段，禁止只返回不可审计的最终结论。若根因来自内部修复或文档校验失败，系统必须额外提供与该内部失败对应的解释字段或调试信息，而不能把 `missing_info` 退化为对用户无意义的占位值。
 
 #### 场景:planner 返回澄清上下文
 - **当** planner 需要 DM 补充法术环位或目标选择
 - **那么** 返回体列出对应 `missing_info`
 - **那么** 返回体说明若不澄清将导致的决策分歧
+
+#### 场景:planner 返回内部失败上下文
+- **当** planner 最终未能产出合法 `TaskDocument`
+- **那么** 返回体必须保留与该失败对应的可读错误信息或解释字段
+- **那么** smoke 脚本可以直接复用该信息生成默认失败摘要
 
 ### 需求:planner 必须采用 schema 约束与执行器校验的双层闭环
 系统必须对 planner 生成结果同时应用 JSON Schema 结构约束与执行器语义校验。系统不得仅依赖 prompt 约定保证产物合法性。
@@ -119,12 +136,17 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 既有调用方无需改动核心消费流程
 
 ### 需求:planner factory 必须从统一项目配置读取默认运行参数
-系统必须要求 planner factory 的默认模型、接入点、超时、重试次数、规划轮数和工具预算来自统一项目配置，而禁止继续以模块内 `DEFAULT_*` 常量或独立环境变量解析逻辑作为长期配置来源。
+系统必须要求 planner factory 的默认模型、接入点、超时、重试次数、规划轮数、工具预算以及默认 prompt 资源定位来自统一项目配置，而禁止继续以模块内 `DEFAULT_*` 常量、内嵌 prompt 字符串或独立路径约定作为长期配置来源。
 
 #### 场景:planner factory 使用统一配置创建实例
 - **当** 调用方未显式覆写 planner factory 的运行参数
 - **那么** planner factory 从统一项目配置读取默认值
 - **那么** planner 实例的运行行为与项目配置文件保持一致
+
+#### 场景:planner factory 从统一配置读取 prompt 来源
+- **当** 调用方通过统一配置创建 planner
+- **那么** factory 必须从统一配置解析默认 prompt 目录与模板文件
+- **那么** 最终创建出的 planner 使用该配置指定的 prompt 模板
 
 ### 需求:planner 必须通过统一配置入口消费配置
 系统必须要求 planner 通过集中配置模块获取运行配置，而禁止在 planner 模块内部直接读取环境变量或散落的默认常量来形成项目级运行配置。
@@ -144,31 +166,43 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 输出中展示真实返回的 `ready`、`needs_human` 或 `blocked` 等结构化状态
 
 ### 需求:planner 集成脚本必须帮助开发者观察代表性规划结果
-系统必须让 planner 集成脚本支持至少一个可复现示例场景，并能够向开发者清晰展示 `task_document`、澄清问题或阻塞原因等核心结果。该结果必须来源于真实调用，而不是脚本预制的假响应。
+系统必须让 planner 集成脚本支持至少一个可复现示例场景，并能够向开发者清晰展示 `task_document`、澄清问题或阻塞原因等核心结果。该结果必须来源于真实调用，而不是脚本预制的假响应。默认示例场景必须使用一份足够丰富的 world state 文件，而不是继续使用只含少量字段的内联最小 state。
 
 #### 场景:脚本展示 planner 结果摘要
 - **当** planner 集成脚本完成一次规划请求
 - **那么** 调用方可以从输出中看出 planner 返回的真实状态类型
 - **那么** 调用方可以查看对应的真实 `task_document`、`questions` 或 `error` 摘要
 
+#### 场景:脚本使用更真实的默认世界状态
+- **当** 开发者直接运行 `smoke/test_planner.py`
+- **那么** 脚本必须从配置指定的默认 world state 文件加载示例状态
+- **那么** 该状态必须覆盖比当前极简内联 state 更完整的角色、战斗或环境信息
+- **那么** 脚本不得继续把内联最小字典作为默认真相
+
 ### 需求:planner smoke 脚本必须默认验证真实配置链路
-系统必须让 `smoke/test_planner.py` 默认读取项目统一配置并构造真实 planner，禁止以内置 fake agent、fake LLM、fake tool 或脚本预制结果作为默认 smoke 路径。
+系统必须让 `smoke/test_planner.py` 默认读取项目统一配置并构造真实 planner，禁止以内置 fake agent、fake LLM、fake tool 或脚本预制结果作为默认 smoke 路径。默认 smoke 状态也必须通过配置指定的 world state 文件提供，并在加载后转换为真实 planner 使用的 state 结构。
 
 #### 场景:开发者直接运行 planner smoke 脚本
 - **当** 开发者执行 `python smoke/test_planner.py`
 - **那么** 脚本必须读取 `config/config.toml` 或显式传入的配置路径
 - **那么** 脚本必须通过 `trpg_py.agent.create_planner(...)` 构造真实 planner
 - **那么** 规划过程中必须使用真实 `search` 与真实 `fetch_keys` 工具链路
+- **那么** 默认 state 必须来自配置指定的 world state 文件而不是内联常量
 - **那么** 脚本不得默认返回脚本内部伪造的规划结果
 
 ### 需求:planner smoke 脚本必须展示真实规划结果
-系统必须让 `smoke/test_planner.py` 的输出直接来源于真实 planner 调用结果，禁止把预制 `ready`、`needs_human` 或 `blocked` 响应当作 smoke 输出真相。
+系统必须让 `smoke/test_planner.py` 的输出直接来源于真实 planner 调用结果，禁止把预制 `ready`、`needs_human` 或 `blocked` 响应当作 smoke 输出真相。对于 `needs_human` 中由内部 `TaskDocument` 校验失败触发的场景，默认人类可读摘要也必须展示具体失败原因，禁止只剩泛化问题和抽象 reason。
 
 #### 场景:脚本输出真实 planner 结果
 - **当** planner smoke 脚本完成一次规划调用
 - **那么** 人类可读摘要或 JSON 输出必须展示真实返回的 `status`
 - **那么** 若返回 `ready`，输出中必须可见真实 `task_document` 摘要或正文
 - **那么** 若返回 `needs_human` 或 `blocked`，输出中必须可见真实问题列表或错误信息
+
+#### 场景:默认摘要展示内部文档失败原因
+- **当** planner smoke 脚本返回 `status=needs_human` 且 `reason=task_document_validation`
+- **那么** 非 `--debug` 的默认人类可读输出必须展示最后一次文档校验失败原因
+- **那么** 调用方无需切换到 JSON 或 `--debug` 才能知道该产物为何不是合法 `TaskDocument`
 
 ### 需求:planner 必须基于 Deep Agents 实现
 系统必须基于 LangChain 的 Deep Agents（`deepagents`）实现 planner 主流程，禁止将第一版 planner 实现为仅依赖基础 LangChain agent loop 的自由编排方案。
@@ -246,4 +280,71 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 运行期日志中必须可见该工具调用的输入参数摘要
 - **那么** 运行期日志中必须可见该工具调用的输出状态或错误结果
 - **那么** 调用方无需修改 planner 业务逻辑即可观察这些日志
+
+### 需求:planner 必须能够使用 reads 补充状态值证据
+系统必须允许 planner 在已知或可发现候选路径的前提下使用 `reads` 工具读取当前状态值，以确认实体 ID、AC、资源或其他关键参数，禁止在 state 已经包含答案时仅因无法读取值而直接进入 HITL。
+
+#### 场景:planner 通过 reads 确认目标实体与关键数值
+- **当** planner 已通过 `fetch_keys` 找到候选状态路径但仍需确认具体值
+- **那么** planner 可以调用 `reads` 读取这些路径上的当前值
+- **那么** planner 可以根据读取结果确认 actor_id、target_id 或其他关键任务参数
+- **那么** 若读取结果已足够支撑规划，planner 不得仅因“未人工澄清”而进入 `needs_human`
+
+### 需求:planner 必须从外置文本模板加载 prompt
+planner 必须从统一配置指定的外置文本模板加载 system prompt 和 user prompt，禁止继续把长期默认 prompt 文案内嵌在 `planner.py` 中作为唯一真相。
+
+#### 场景:planner 使用配置指定的默认 prompt 模板
+- **当** 调用方通过统一配置创建 planner 且未显式覆写 prompt 来源
+- **那么** planner 必须从配置指定的文本模板加载 system prompt 和 user prompt
+- **那么** planner 不得继续依赖代码内联 prompt 字符串作为默认行为
+
+### 需求:planner 必须渲染受控占位符并对模板错误快速失败
+planner 必须支持把 instruction、context、policy、tool budget 和 repair feedback 等动态字段渲染到外置 prompt 模板中，并在模板文件缺失、不可读、占位符未知或渲染后仍残留未解析占位符时快速失败。
+
+#### 场景:planner 渲染 user prompt 动态内容
+- **当** planner 发起一次新的规划请求
+- **那么** user prompt 模板必须能接收 instruction、context JSON、policy JSON 和 tool budget 等动态内容
+- **那么** 首轮或修复轮的最终 prompt 必须来源于模板渲染结果
+
+#### 场景:planner 在修复轮渲染 validation feedback
+- **当** planner 因 schema 或语义校验失败进入修复轮
+- **那么** 系统必须把 validation feedback 注入外置 user prompt 模板
+- **那么** 修复轮不必回退到代码内嵌字符串拼接
+
+#### 场景:prompt 模板装载或渲染失败
+- **当** planner 配置引用了不存在的 prompt 文件、不可读文件或非法占位符
+- **那么** planner 创建或调用必须快速失败
+- **那么** 错误信息必须指出具体的 prompt 文件或模板问题
+
+### 需求:planner smoke 调试入口必须暴露规划轨迹摘要
+系统必须让 planner 的手动 smoke/debug 入口在显式调试模式下展示本次规划的关键轨迹，禁止只输出最终三态而完全隐藏中间修复与失败上下文。
+
+#### 场景:开发者以调试模式运行 planner smoke 脚本
+- **当** 开发者以 planner smoke/debug 入口运行一次真实规划并显式开启 debug
+- **那么** 输出中必须包含规划轮次摘要
+- **那么** 输出中必须包含每轮结构化响应或其可读摘要
+- **那么** 若发生修复，输出中必须包含修复反馈或最后一次校验失败原因
+
+#### 场景:开发者以 JSON 形式查看调试结果
+- **当** 开发者以 JSON 模式运行 planner smoke/debug 入口并显式开启 debug
+- **那么** 返回体必须包含结构化的 debug 负载
+- **那么** 该负载必须可用于自动测试断言或人工复制排查
+
+### 需求:planner prompt 必须显式教授 TaskDocument DSL
+系统必须让 planner 使用的提示词显式描述合法 `TaskDocument` 的最小结构、允许的步骤 `type/kind` 组合、引用约定和至少一个代表性规范示例，禁止仅以“生成 TaskDocument”之类的抽象描述要求模型自行猜测 DSL。
+
+#### 场景:planner 根据显式 DSL 约束规划攻击动作
+- **当** planner 处理类似“哥布林攻击 hero_1”的 DM 指令
+- **那么** prompt 中必须向模型暴露 `task_id`、`version`、`context`、`policy`、`steps` 以及步骤级 `id/type/kind/args` 等最小骨架
+- **那么** prompt 中必须明确合法步骤类型与引用方式，而不是允许模型自由发明 `action`、`actor` 等替代字段
+- **那么** prompt 中必须提供至少一个符合当前引擎 DSL 的规范示例
+
+### 需求:planner 在返回 ready 前必须能够使用 lint 做候选文档自检
+系统必须允许 planner 在准备返回 `status=ready` 前将候选 `TaskDocument` 提交给 `lint` 工具做只读校验，并根据结构化校验结果修复或降级，而禁止把所有合法性发现都推迟到最终兜底校验之后。
+
+#### 场景:planner 用 lint 收口候选任务文档
+- **当** planner 已完成规则与状态路径取证并生成候选 `TaskDocument`
+- **那么** planner 必须能够调用 `lint` 对该候选文档执行只读校验
+- **那么** 若 `lint` 返回非法结果，planner 必须根据错误结果修复文档或转入 `needs_human/blocked`
+- **那么** 若 `lint` 返回合法结果，planner 才可以继续进入最终 `ready` 输出流程
 

@@ -180,7 +180,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual("System prompt budget 7", agent_factory.calls[0]["system_prompt"])
         self.assertEqual({"human": True}, agent_factory.calls[0]["interrupt_on"])
         self.assertIsNotNone(agent_factory.calls[0]["checkpointer"])
-        self.assertEqual(["search", "fetch_keys", "lint"], [tool.name for tool in agent_factory.calls[0]["tools"]])
+        self.assertEqual(["search", "fetch_keys", "reads", "lint"], [tool.name for tool in agent_factory.calls[0]["tools"]])
         self.assertEqual("openai:test-model", captured_config[0].model)
 
     @patch.dict(
@@ -203,6 +203,7 @@ class PlannerTests(unittest.TestCase):
             config_path=str(DEFAULT_PROJECT_CONFIG_PATH),
             search_tool=DummyTool("search"),
             fetch_keys_tool=DummyTool("fetch_keys"),
+            reads_tool=DummyTool("reads"),
             lint_tool=DummyTool("lint"),
             model_builder=lambda config: "fake-model",
             agent_factory=agent_factory,
@@ -213,11 +214,46 @@ class PlannerTests(unittest.TestCase):
         system_prompt = agent_factory.calls[0]["system_prompt"]
         user_prompt = agent_factory.agent.calls[0]["input"]["messages"][0]["content"]
         self.assertIn("use lint to validate your candidate TaskDocument", system_prompt)
+        self.assertIn("Use reads when you know or can discover promising state paths", system_prompt)
         self.assertIn("TaskDocument minimal shape", user_prompt)
+        self.assertIn("Use reads to confirm the current values", user_prompt)
         self.assertIn("Allowed type/kind pairs", user_prompt)
         self.assertIn("Do not invent substitute step fields", user_prompt)
         self.assertIn("Canonical example", user_prompt)
         self.assertIn("Use lint to validate a candidate TaskDocument", user_prompt)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_factory_builds_default_reads_tool_from_state(self) -> None:
+        agent_factory = FakeAgentFactory(
+            responses=[
+                {
+                    "structured_response": {
+                        "status": "needs_human",
+                        "questions": [{"question": "Need more target detail"}],
+                    }
+                }
+            ]
+        )
+        state = {"actors": {"aldera": {"id": "aldera", "ac": 18}}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                state=state,
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+        output = planner.reads_tool.invoke({"paths": ["actors.aldera.id", "actors.aldera.ac"]})
+        self.assertEqual("ok", output["status"])
+        self.assertEqual("aldera", output["items"][0]["value"])
+        self.assertEqual(18, output["items"][1]["value"])
 
     @patch.dict(
         os.environ,
