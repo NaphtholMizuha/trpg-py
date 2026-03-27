@@ -29,25 +29,31 @@ planner 必须以生成可被执行器消费的 `TaskDocument` 为目标产物�
 - **那么** 该文档可直接进入执行器校验与执行流程
 
 ### 需求:planner 必须通过 search 和 fetch_keys 获取证据
-planner 必须将 `search` 与 `fetch_keys` 作为基础信息工具，并通过工具调用结果驱动后续推理分支。planner 禁止在可调用工具前提下跳过取证直接凭空生成关键规则结论或关键路径引用。对于候选 `TaskDocument` 的合法性收口，planner 必须能够进一步使用 `lint` 工具执行只读自检，但 `lint` 不得替代 `search` 与 `fetch_keys` 的取证职责。
+planner 必须将 `search` 与 `list` 作为基础信息工具，并通过工具调用结果驱动后续推理分支。对于需要读取具体状态值的场景，planner 必须进一步优先使用批量 `read` 一次性确认一组候选路径上的当前值，而不是把同类确认拆成大量零散单路径读取。对于候选 `TaskDocument` 的合法性收口，planner 必须能够进一步使用 `lint` 工具执行只读自检，但 `lint` 不得替代 `search`、`list` 与 `read` 的取证职责，也不得演化为无限自修循环。
 
 #### 场景:planner 使用 search 补充规则证据
 - **当** DM 指令涉及规则判断（如攻击、豁免、伤害）
 - **那么** planner 可以调用 `search` 检索规则原文
 - **那么** 规则结论建立在检索证据之上
 
-#### 场景:planner 使用 fetch_keys 补充状态路径证据
+#### 场景:planner 使用 list 补充状态路径证据
 - **当** planner 需要引用状态路径生成步骤参数
-- **那么** planner 可以调用 `fetch_keys` 枚举候选路径
+- **那么** planner 可以调用 `list` 枚举候选路径
 - **那么** 产出的路径引用与 state 点路径语义保持一致
+
+#### 场景:planner 使用批量 read 补充状态值证据
+- **当** planner 已经发现一组同类候选路径并需要确认其当前值
+- **那么** planner 必须优先使用一次批量 `read` 读取这些路径
+- **那么** planner 不得把该组值确认机械拆成多次单路径读取
 
 #### 场景:planner 使用 lint 收口候选文档
 - **当** planner 已具备足够规则证据和状态路径证据并准备返回 `ready`
 - **那么** planner 可以调用 `lint` 对候选 `TaskDocument` 做只读合法性校验
 - **那么** `lint` 的结果只用于校验候选文档，不得被当作规则证据或状态事实来源
+- **那么** 若没有新的状态或规则证据，planner 不得仅靠重复 `lint` 无限修补
 
 ### 需求:planner 必须显式区分 ready、needs_human 与 blocked
-planner 必须以稳定状态语义区分三类规划结果：可直接执行、需要 DM 澄清、以及系统阻塞。系统禁止把这三类情况折叠为单一自由文本回复。对于 `needs_human` 与 `blocked`，系统还必须暴露可读的根因解释，禁止把内部校验失败或修复未收敛笼统伪装成“用户信息不足”。
+planner 必须以稳定状态语义区分三类规划结果：可直接执行、需要 DM 澄清、以及系统阻塞。系统禁止把这三类情况折叠为单一自由文本回复。对于 `needs_human` 与 `blocked`，系统还必须暴露可读的根因解释，禁止把内部校验失败或修复未收敛笼统伪装成“用户信息不足”。若 blocked 根因来自结构化输出或 deep agent 调用边界，系统还必须把更详细的异常上下文写入 planner 文件日志，供开发者进一步排查。
 
 #### 场景:信息充分时返回 ready
 - **当** planner 已获得足够证据并完成文档校验
@@ -65,11 +71,11 @@ planner 必须以稳定状态语义区分三类规划结果：可直接执行、
 - **那么** 返回 `status=blocked`
 - **那么** 返回体包含可读错误原因与恢复建议
 
-#### 场景:内部文档校验失败时暴露真实根因
-- **当** planner 生成了结构合法但未通过执行器语义校验的 `TaskDocument` 且修复未收敛
-- **那么** 系统不得仅返回泛化的“请补充关键细节”作为唯一解释
-- **那么** 返回体或调试负载中必须可见最后一次校验失败原因
-- **那么** 调用方可以区分这是内部产物失败而非纯业务信息缺失
+#### 场景:结构化输出失败时保留可追踪诊断
+- **当** planner 因结构化输出解析失败而返回 `status=blocked`
+- **那么** 返回体至少必须保留可读错误原因
+- **那么** planner 文件日志中必须保留更详细的结构化输出异常上下文
+- **那么** 调用方可以据此区分这是模型/网关输出问题，而不是普通业务信息缺失
 
 ### 需求:planner 必须支持 LLM 主导的不确定性判定并保留最小硬约束
 系统必须允许 planner 由 LLM 主导判断“信息是否足够”，并在不确定时主动触发 HITL。与此同时，系统必须保留最小硬约束用于兜底，例如文档结构非法、关键实体不可唯一映射或关键工具错误等不可忽略风险。
@@ -111,13 +117,19 @@ planner 在 `needs_human` 或存在推断前提时，必须返回结构化 `miss
 - **那么** planner 根据错误原因重试修复或触发 HITL
 
 ### 需求:planner 必须在提问前优先完成可用工具取证
-系统必须要求 planner 在触发 HITL 之前尽可能完成 `search` 和 `fetch_keys` 的取证尝试，避免因未检索或未枚举路径造成过早提问。
+系统必须要求 planner 在触发 HITL 之前尽可能完成 `search`、`list` 与必要的批量 `read` 取证尝试，避免因未检索、未枚举路径或未读取关键值造成过早提问。对于 `list` 或 `read` 已明确返回 `status=no_match` 的事实，planner 必须把它视为“当前 state 中没有该事实”的证据；若工具已提供建议路径，planner 仅可沿建议路径再做有限修正，而不得机械重复原失败请求。
 
 #### 场景:先取证后提问
 - **当** DM 指令初看存在歧义
 - **当** 工具取证后仍无法收敛到单一可执行方案
 - **那么** planner 才触发 `needs_human`
 - **那么** 提问内容基于已获取证据而非泛化追问
+
+#### 场景:no_match 经过建议修正后仍失败
+- **当** `list` 或 `read` 返回 `status=no_match` 且提供了建议路径
+- **当** planner 已基于建议做过一次有限修正但仍未找到所需事实
+- **那么** planner 必须把该事实视为当前 state 缺失
+- **那么** planner 不得继续围绕原主题无限试探
 
 ### 需求:planner 必须保持与执行器的职责分离
 planner 只负责“规划与文档生成”，不得在 planner 层直接提交状态写入或替代引擎执行步骤。规则结算结果必须由执行器基于 `TaskDocument` 在运行时产生。
@@ -205,13 +217,13 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 调用方无需切换到 JSON 或 `--debug` 才能知道该产物为何不是合法 `TaskDocument`
 
 ### 需求:planner 必须基于 create_agent runtime 实现
-系统必须基于 LangChain 的 `create_agent()`/LangGraph agent runtime 实现 planner 主流程，禁止继续要求 planner 默认依赖 `deepagents.create_deep_agent()` 及其通用 coding-agent 默认 prompt/middleware 栈。planner 仍然必须能够在同一运行流中消费 `search`、`fetch_keys`、`reads` 与 `lint`，并输出结构化结果。
+系统必须基于 LangChain 的 `create_agent()`/LangGraph agent runtime 实现 planner 主流程，禁止继续要求 planner 默认依赖 `deepagents.create_deep_agent()` 及其通用 coding-agent 默认 prompt/middleware 栈。planner 仍然必须能够在同一运行流中消费 `search`、`list`、`read` 与 `lint`，并输出结构化结果。
 
 #### 场景:调用方通过 create_agent planner 执行规划
 - **当** 调用方创建并运行 planner
 - **那么** planner 默认由 `langchain.agents.create_agent()` 创建运行图
 - **那么** planner 不再要求加载 deep agent 默认的待办清单、文件系统、子代理或补丁工具中间件
-- **那么** planner 仍可在同一运行流中消费 `search`、`fetch_keys`、`reads` 与 `lint`
+- **那么** planner 仍可在同一运行流中消费 `search`、`list`、`read` 与 `lint`
 - **那么** planner 仍输出结构化 `PlannerResult`
 
 ### 需求:planner 必须提供 factory 统一模型接入与运行配置
@@ -251,12 +263,13 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 返回体包含错误原因与恢复建议
 
 ### 需求:planner 必须先取证再触发 HITL
-系统必须要求 planner 在触发 `needs_human` 之前优先尝试使用 `search` 与 `fetch_keys` 进行证据收集，禁止在可取证前提下直接向 DM 追问。
+系统必须要求 planner 在触发 HITL 之前尽可能完成 `search` 和 `fetch_keys` 的取证尝试，避免因未检索或未枚举路径造成过早提问。
 
-#### 场景:先工具取证后仍不确定
-- **当** planner 完成至少一轮工具取证后仍存在关键歧义
-- **那么** planner 触发 `needs_human`
-- **那么** 问题内容基于已检索证据形成
+#### 场景:先取证后提问
+- **当** DM 指令初看存在歧义
+- **当** `evidence_agent` 完成可用工具取证后仍无法收敛到单一可执行方案
+- **那么** planner 才触发 `needs_human`
+- **那么** 提问内容基于 `EvidenceBundle` 中已获取的证据而非泛化追问
 
 ### 需求:planner 必须执行双层校验闭环
 系统必须对 planner 生成的任务文档先执行 Schema 结构校验，再执行执行器语义校验。若任一校验失败，planner 必须进入修复或澄清分支，禁止直接返回 `ready`。
@@ -280,7 +293,7 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 若缺少 DM 明确意见则按 `store > search` 顺序采信
 
 ### 需求:planner 依赖的工具调用必须可通过运行期日志观察
-系统必须确保 planner 所依赖的工具调用在运行期可观察，禁止让调用方只能依赖最终 `ready/needs_human/blocked` 结果反推中间工具输入输出。
+系统必须确保 planner 所依赖的工具调用在运行期可观察，禁止让调用方只能依赖最终 `ready/needs_human/blocked` 结果反推中间工具输入输出。除工具自身的摘要日志外，系统还必须把这些调用所处的 planner run/round 上下文纳入 planner 文件日志，以便开发者把某次工具调用与某次 blocked 或修复轮稳定关联起来。
 
 #### 场景:planner 调用 search 或 fetch_keys 时留下工具日志
 - **当** planner 在一次规划过程中调用 `search` 或 `fetch_keys`
@@ -288,12 +301,17 @@ planner 只负责“规划与文档生成”，不得在 planner 层直接提交
 - **那么** 运行期日志中必须可见该工具调用的输出状态或错误结果
 - **那么** 调用方无需修改 planner 业务逻辑即可观察这些日志
 
-### 需求:planner 必须能够使用 reads 补充状态值证据
-系统必须允许 planner 在已知或可发现候选路径的前提下使用 `reads` 工具读取当前状态值，以确认实体 ID、AC、资源或其他关键参数，禁止在 state 已经包含答案时仅因无法读取值而直接进入 HITL。
+#### 场景:工具调用可关联到 planner 运行上下文
+- **当** 开发者查看某次 planner 运行对应的文件日志
+- **那么** 系统必须让开发者可以把工具调用摘要关联到该次运行的 run 标识、轮次或等价上下文
+- **那么** 开发者无需再依赖终端时间顺序手工拼接工具日志与 planner blocked 结果
 
-#### 场景:planner 通过 reads 确认目标实体与关键数值
-- **当** planner 已通过 `fetch_keys` 找到候选状态路径但仍需确认具体值
-- **那么** planner 可以调用 `reads` 读取这些路径上的当前值
+### 需求:planner 必须能够使用 reads 补充状态值证据
+系统必须允许 planner 在已知或可发现候选路径的前提下使用 `read` 工具读取当前状态值，以确认实体 ID、AC、资源或其他关键参数，禁止在 state 已经包含答案时仅因无法读取值而直接进入 HITL。
+
+#### 场景:planner 通过 read 确认目标实体与关键数值
+- **当** planner 已通过 `list` 找到候选状态路径但仍需确认具体值
+- **那么** planner 可以调用 `read` 读取这些路径上的当前值
 - **那么** planner 可以根据读取结果确认 actor_id、target_id 或其他关键任务参数
 - **那么** 若读取结果已足够支撑规划，planner 不得仅因“未人工澄清”而进入 `needs_human`
 
@@ -324,13 +342,14 @@ planner 必须支持把 instruction、context、policy、tool budget 和 repair 
 - **那么** 错误信息必须指出具体的 prompt 文件或模板问题
 
 ### 需求:planner smoke 调试入口必须暴露规划轨迹摘要
-系统必须让 planner 的手动 smoke/debug 入口在显式调试模式下展示本次规划的关键轨迹，禁止只输出最终三态而完全隐藏中间修复与失败上下文。
+系统必须让 planner 的手动 smoke/debug 入口在显式调试模式下展示本次规划的关键轨迹，禁止只输出最终三态而完全隐藏中间修复与失败上下文。除现有摘要或 JSON debug 负载外，系统还必须让开发者能够发现本次运行对应的 planner 文件日志位置，而不是要求开发者手工猜测日志目录。
 
 #### 场景:开发者以调试模式运行 planner smoke 脚本
 - **当** 开发者以 planner smoke/debug 入口运行一次真实规划并显式开启 debug
 - **那么** 输出中必须包含规划轮次摘要
 - **那么** 输出中必须包含每轮结构化响应或其可读摘要
 - **那么** 若发生修复，输出中必须包含修复反馈或最后一次校验失败原因
+- **那么** 输出中必须能够发现本次运行对应的 planner 日志文件路径或等价定位信息
 
 #### 场景:开发者以 JSON 形式查看调试结果
 - **当** 开发者以 JSON 模式运行 planner smoke/debug 入口并显式开启 debug
@@ -400,3 +419,120 @@ planner 必须支持把 instruction、context、policy、tool budget 和 repair 
 - **当** prompt 提供 canonical example、工具说明或路径示例
 - **那么** 相邻内容中必须可见从 `actors...` 裸路径到 `state.actors...` 引用路径的对应关系
 - **那么** 开发者和模型都可以看出 planner 应先用工具确认真实路径，再把该路径写入最终 `$ref`
+
+### 需求:planner 必须能够利用 no_match 建议路径继续收敛状态证据
+系统必须允许 planner 在 `list` 或 `read` 返回 `status=no_match` 且包含建议路径时，把这些建议当作后续状态取证线索；禁止 planner 在已经拿到可用建议后仍机械地重复同一失败路径请求。
+
+#### 场景:planner 根据建议路径修正状态取证
+- **当** planner 调用 `list` 或 `read` 返回 `status=no_match` 且包含建议路径
+- **那么** planner 可以改用建议路径或建议前缀继续取证
+- **那么** 若建议已足够支撑后续读取或规划，planner 不得重复同一失败请求
+
+### 需求:planner 工具预算耗尽后必须强制输出最终结构化结果
+系统必须在 planner 达到单轮工具预算上限时停止继续取证，但禁止立即把该异常直接映射为最终 `needs_human` 结果。系统必须基于当前已收集的上下文进入一次不允许再调用工具的最终收敛阶段，并输出合法的 `PlannerResult`，除非该最终收敛本身也失败。
+
+#### 场景:预算耗尽后基于已有证据输出 ready
+- **当** planner 在一次规划中达到工具预算上限
+- **当** 已有证据足以支持合法 `TaskDocument`
+- **那么** 系统必须停止继续调用工具
+- **那么** 系统必须继续执行一次无工具最终收敛
+- **那么** 最终返回可以是 `status=ready`，而不是仅因预算耗尽直接返回 `needs_human`
+
+#### 场景:预算耗尽后基于已有证据输出 needs_human
+- **当** planner 在一次规划中达到工具预算上限
+- **当** 已有证据仍不足以稳定生成可执行文档
+- **那么** 系统必须停止继续调用工具
+- **那么** 系统必须基于已有证据输出结构化 `needs_human`
+- **那么** 澄清问题必须反映真实缺口，而不是只剩抽象的“工具预算已耗尽”
+
+#### 场景:最终收敛阶段禁止再次调用工具
+- **当** planner 因工具预算耗尽进入最终收敛阶段
+- **那么** 该阶段禁止再次调用 `search`、`fetch_keys`、`reads`、`lint` 或其他工具
+- **那么** 该阶段只能整理当前上下文、已有证据和已有校验反馈
+- **那么** 系统不得因为再次尝试工具而进入新的预算异常循环
+
+#### 场景:最终收敛失败时才暴露 tool_budget_exhausted
+- **当** planner 因工具预算耗尽进入最终收敛阶段
+- **当** 最终收敛仍未产出合法 `PlannerResult`
+- **那么** 系统才可以返回 `reason=tool_budget_exhausted` 或等价的失败原因
+- **那么** 返回体必须包含可读错误信息或调试信息，说明失败发生在预算耗尽后的最终收敛阶段
+
+### 需求:planner 必须实现为显式的 LangGraph staged workflow
+系统必须将 planner 主流程实现为显式的 LangGraph 工作流，而不是继续依赖单体 agent 在一次调用内同时完成取证、DSL 生产、修复和 HITL 协调。该工作流必须至少区分 `evidence_agent` 阶段和 `dsl_agent` 阶段。
+
+#### 场景:planner 在 graph 中先取证后产出 DSL
+- **当** 调用方发起一次新的规划请求
+- **那么** planner 先进入 `evidence_agent` 阶段
+- **那么** 在证据足够时 planner 再进入 `dsl_agent` 阶段
+- **那么** 系统不得要求单一 agent 同时承担两个阶段的全部职责
+
+### 需求:planner 必须使用两个独立的 create_agent 节点承担核心阶段
+系统必须把信息获取和 DSL 生产/修复分别建模为两个独立的 `create_agent()` 节点，并统一命名为 `evidence_agent` 与 `dsl_agent`。`evidence_agent` 必须只挂载 `search`、`list`、`read`；`dsl_agent` 必须只挂载 `lint`，并且不得回头访问信息获取工具。
+
+#### 场景:evidence_agent 只消费取证工具
+- **当** planner 执行信息获取阶段
+- **那么** `evidence_agent` 可以使用 `search`、`list`、`read`
+- **那么** `evidence_agent` 不得调用 `lint`
+- **那么** `evidence_agent` 输出证据中间产物或进入 HITL
+
+#### 场景:dsl_agent 只消费 lint
+- **当** planner 执行 DSL 生产或修复阶段
+- **那么** `dsl_agent` 可以使用 `lint`
+- **那么** `dsl_agent` 不得调用 `search`、`list`、`read`
+- **那么** 系统通过 runtime 工具隔离维持阶段边界
+
+### 需求:阶段间必须通过轻量 EvidenceBundle 传递证据
+系统必须在 `evidence_agent` 阶段和 `dsl_agent` 阶段之间使用轻量 `EvidenceBundle` 传递证据。该中间产物必须至少包含证据小结、关键事实、缺口、假设以及来源路径；系统禁止要求该中间产物承载过度结构化的全量世界模型。
+
+#### 场景:evidence_agent 输出轻量 EvidenceBundle
+- **当** `evidence_agent` 完成一次证据收集
+- **那么** 输出必须包含可读证据小结
+- **那么** 输出必须包含关键事实及其来源路径
+- **那么** 输出必须包含缺口和假设
+- **那么** 输出必须指示是否已准备好进入 `dsl_agent` 阶段
+
+#### 场景:dsl_agent 消费 EvidenceBundle 而不是原始工具回放
+- **当** `dsl_agent` 开始生成或修复 `TaskDocument`
+- **那么** `dsl_agent` 基于 `EvidenceBundle` 消费证据
+- **那么** `dsl_agent` 无需重新解释原始 `search/list/read` 输出
+- **那么** `dsl_agent` 仍能根据来源路径生成正确的 `$ref`
+
+### 需求:needs_human 必须表示可恢复的 HITL 暂停
+系统必须把 `needs_human` 视为 graph 内部的 HITL 暂停点，而不是 planner 工作流的终止。系统对外仍可返回 `status=needs_human`，但内部必须支持在同一 thread 或等价 graph state 上 resume 并继续后续阶段。
+
+#### 场景:evidence_agent 在证据不足时暂停
+- **当** `evidence_agent` 完成可用取证后仍存在关键缺口
+- **那么** planner 触发 `needs_human`
+- **那么** 该状态表示 HITL 暂停而不是终止
+- **那么** 调用方可以在同一 thread 或等价 state 上恢复 graph
+
+#### 场景:dsl_agent 在业务决策仍缺失时暂停
+- **当** `dsl_agent` 发现证据虽足够取证但仍缺少必要人类决策
+- **那么** planner 触发 `needs_human`
+- **那么** graph 必须暂停在当前阶段上下文
+- **那么** 恢复后系统继续同一条规划工作流，而不是重启整轮规划
+
+### 需求:lint 必须驱动 dsl_agent 的自我迭代
+系统必须允许 `dsl_agent` 把 `lint` 作为自反馈工具，用于在 ready 前对候选 `TaskDocument` 进行有限次数的自我修复。系统禁止把 `lint` 仅保留为全局末端校验，导致 `dsl_agent` 无法利用校验反馈迭代自身产物。
+
+#### 场景:dsl_agent 根据 lint 反馈修复候选文档
+- **当** `dsl_agent` 产出候选 `TaskDocument` 且 `lint` 返回非法结果
+- **那么** 系统把该反馈回灌到 `dsl_agent`
+- **那么** `dsl_agent` 可以在限定预算内重新生成或修复文档
+- **那么** 若修复成功，planner 继续返回 `ready`
+
+### 需求:planner 必须限制单轮工具循环并对重复失败主题收口
+系统必须对单次 planner 运行中的工具调用次数施加硬限制，并对重复失败的路径、前缀或缺失事实主题做熔断。禁止 planner 在同一次 `agent.invoke(...)` 内围绕同一缺口无限重复 `list`、`read`、`search` 或 `lint`。
+
+#### 场景:同一缺失事实重复失败后必须收口
+- **当** planner 围绕同一 bare path、相同 `prefix` 或等价缺失事实多次调用 `list` 或 `read` 且持续返回 `status=no_match`
+- **那么** planner 必须停止继续重复该主题的取证
+- **那么** planner 必须将该结果解释为当前 state 中缺失对应事实
+- **那么** planner 后续只能收口为 `needs_human`、明确拒绝相关假设，或基于已知证据继续规划
+
+#### 场景:单轮工具预算耗尽时停止继续取证
+- **当** planner 在一次规划尝试中达到配置的工具调用次数上限
+- **那么** planner 不得继续调用更多工具
+- **那么** planner 必须返回可解释的收口结果或修复反馈
+- **那么** 返回体或调试信息中必须可见预算耗尽这一原因
+
