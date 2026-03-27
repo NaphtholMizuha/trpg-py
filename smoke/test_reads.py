@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-reads 工具演示脚本
+read 工具演示脚本
 
 使用方式:
   python smoke/test_reads.py
@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from smoke.state_loader import load_toml_state
-from trpg_py.agent.tools import create_reads_tool
+from trpg_py.agent.tools import create_read_tool
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "config" / "world_state.toml"
@@ -30,7 +30,7 @@ DEFAULT_NO_MATCH_PATHS = ["actors.missing_target.id"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="演示 reads 工具的状态值读取能力")
+    parser = argparse.ArgumentParser(description="演示 read 工具的状态值读取能力")
     parser.add_argument(
         "--state-file",
         default=str(DEFAULT_STATE_FILE),
@@ -57,7 +57,7 @@ def main() -> int:
     paths = list(args.paths or DEFAULT_PATHS)
 
     state = load_state(state_path)
-    tool = create_reads_tool(state=state)
+    tool = create_read_tool(state=state)
     result_match = tool.invoke({"paths": paths})
     result_no_match = tool.invoke({"paths": DEFAULT_NO_MATCH_PATHS})
 
@@ -70,7 +70,7 @@ def main() -> int:
         return 0
 
     print("=" * 72)
-    print("TRPG Agent Reads Smoke Test")
+    print("TRPG Agent Read Smoke Test")
     print("=" * 72)
     print(f"state_file : {state_path}")
     print("match demo :")
@@ -91,16 +91,24 @@ def print_human_result(result: dict[str, Any]) -> None:
     items = result.get("items", [])
     if not items:
         print("items      : (none)")
-        return
-    print(f"items      : {len(items)}")
-    for item in items:
-        path = item.get("path", "")
-        item_status = item.get("status", "unknown")
-        if item_status == "ok":
-            print(f"- {path} = {json.dumps(item.get('value'), ensure_ascii=False)}")
-            continue
-        error = item.get("error", {})
-        print(f"- {path} -> {item_status}: {error.get('message', '')}")
+    else:
+        print(f"items      : {len(items)}")
+        for item in items:
+            path = item.get("path", "")
+            item_status = item.get("status", "unknown")
+            if item_status == "ok":
+                print(f"- {path} = {json.dumps(item.get('value'), ensure_ascii=False)}")
+                continue
+            error = item.get("error", {})
+            print(f"- {path} -> {item_status}: {error.get('message', '')}")
+            suggestions = item.get("suggestions", [])
+            for suggestion in suggestions:
+                print(f"  suggestion: {suggestion}")
+    suggestions = result.get("suggestions", [])
+    if suggestions:
+        print(f"suggestions: {len(suggestions)}")
+        for suggestion in suggestions:
+            print(f"* {suggestion}")
 
 
 if __name__ == "__main__":

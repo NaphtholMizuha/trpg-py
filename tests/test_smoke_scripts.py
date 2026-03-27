@@ -275,15 +275,17 @@ class SmokeReadsScriptTests(unittest.TestCase):
         self.assertEqual("ok", payload["match"]["status"])
         self.assertEqual("no_match", payload["no_match"]["status"])
         self.assertEqual("aldera", payload["match"]["items"][0]["value"])
+        self.assertTrue(payload["no_match"]["suggestions"])
 
     def test_reads_smoke_script_prints_human_summary(self) -> None:
         output, _ = run_reads_script()
 
-        self.assertIn("TRPG Agent Reads Smoke Test", output)
+        self.assertIn("TRPG Agent Read Smoke Test", output)
         self.assertIn("match demo :", output)
         self.assertIn("no_match demo:", output)
         self.assertIn("status     : ok", output)
         self.assertIn("status     : no_match", output)
+        self.assertIn("suggestions:", output)
 
 
 class SmokePlannerScriptTests(unittest.TestCase):
@@ -316,7 +318,7 @@ class SmokePlannerScriptTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("tools      : search=real, fetch_keys=real, reads=real, lint=real", output)
+        self.assertIn("tools      : search=real, list=real, read=real, lint=real", output)
 
     def test_planner_smoke_script_loads_world_state_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -464,6 +466,24 @@ class SmokePlannerScriptTests(unittest.TestCase):
         self.assertIn("error_type : ValidationError", output)
         self.assertIn("detail     : Step 1 references a future result that is not yet available.", output)
 
+    def test_planner_smoke_script_prints_tool_budget_detail_without_debug(self) -> None:
+        output, _ = run_planner_script(
+            planner_payload={
+                "status": "needs_human",
+                "reason": "tool_budget_exhausted",
+                "questions": [{"question": "Planner ran out of tool budget."}],
+                "missing_info": ["planner_tool_budget"],
+                "error": {
+                    "type": "ToolCallLimitExceededError",
+                    "message": "Tool call limit reached: run limit exceeded (8/7 calls).",
+                },
+            },
+        )
+
+        self.assertIn("reason     : tool_budget_exhausted", output)
+        self.assertIn("error_type : ToolCallLimitExceededError", output)
+        self.assertIn("detail     : Tool call limit reached: run limit exceeded (8/7 calls).", output)
+
     def test_planner_smoke_script_keeps_regular_needs_human_output_compact(self) -> None:
         output, _ = run_planner_script(
             planner_payload={
@@ -610,6 +630,28 @@ class SmokePlannerEngineScriptTests(unittest.TestCase):
 
         self.assertIn("Planner Stage", output)
         self.assertIn("blocked", output)
+        self.assertIn("/tmp/planner/run.log", output)
+        self.assertNotIn("engine_calls", captured)
+
+    def test_planner_engine_smoke_script_shows_needs_human_reason_and_missing_info(self) -> None:
+        output, captured = run_planner_engine_script(
+            planner_payload={
+                "status": "needs_human",
+                "reason": "tool_budget_exhausted",
+                "missing_info": ["planner_tool_budget"],
+                "questions": [{"question": "Planner ran out of tool budget."}],
+                "error": {
+                    "type": "ToolCallLimitExceededError",
+                    "message": "Tool call limit reached: run limit exceeded (8/7 calls).",
+                },
+                "planner_log_path": "/tmp/planner/run.log",
+            },
+        )
+
+        self.assertIn("Planner Stage", output)
+        self.assertIn("tool_budget_exhausted", output)
+        self.assertIn("planner_tool_budget", output)
+        self.assertIn("ToolCallLimitExceededError", output)
         self.assertIn("/tmp/planner/run.log", output)
         self.assertNotIn("engine_calls", captured)
 

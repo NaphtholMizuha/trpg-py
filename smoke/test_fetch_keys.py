@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-fetch_keys 功能演示脚本
+list 工具演示脚本
 
 使用方式:
   python smoke/test_fetch_keys.py
@@ -20,15 +20,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from trpg_py.agent.tools import create_fetch_keys_tool
+from trpg_py.agent.tools import create_list_tool
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "examples" / "fetch_keys_state.json"
-DEFAULT_NO_MATCH_PREFIX = "not.exists.prefix"
+DEFAULT_NO_MATCH_PREFIX = "actors.goblin_2"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="演示 fetch_keys 的全量与按范围枚举能力")
+    parser = argparse.ArgumentParser(description="演示 list 工具的全量与按范围枚举能力")
     parser.add_argument("--prefix", default=None, help="路径前缀过滤，例如 actors.goblin_1")
     parser.add_argument("--json", action="store_true", help="仅输出 JSON 结果")
     parser.add_argument(
@@ -53,7 +53,7 @@ def main() -> int:
     no_match_prefix = DEFAULT_NO_MATCH_PREFIX
 
     state = load_state(state_path)
-    tool = create_fetch_keys_tool(state=state)
+    tool = create_list_tool(state=state)
 
     result_all = tool.invoke({})
     result_prefix = tool.invoke({"prefix": prefix}) if prefix else None
@@ -69,7 +69,7 @@ def main() -> int:
         return 0
 
     print("=" * 72)
-    print("TRPG Agent Fetch Keys Smoke Test")
+    print("TRPG Agent List Smoke Test")
     print("=" * 72)
     print("全量枚举:")
     print_human_result(result_all)
@@ -95,10 +95,15 @@ def print_human_result(result: dict[str, Any]) -> None:
     items = result.get("items", [])
     if not items:
         print("items : (none)")
-        return
-    print(f"items : {len(items)}")
-    for item in items:
-        print(f"- {item}")
+    else:
+        print(f"items : {len(items)}")
+        for item in items:
+            print(f"- {item}")
+    suggestions = result.get("suggestions", [])
+    if suggestions:
+        print(f"suggestions: {len(suggestions)}")
+        for suggestion in suggestions:
+            print(f"* {suggestion}")
 
 
 if __name__ == "__main__":

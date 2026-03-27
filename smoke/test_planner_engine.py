@@ -37,6 +37,7 @@ from smoke.test_engine import format_value, render_summary
 from smoke.test_planner import (
     DEFAULT_INSTRUCTION as DEFAULT_PLANNER_INSTRUCTION,
     _extract_resume_thread_id,
+    build_stage_summary,
     load_demo_state,
     parse_resume_json,
     prompt_for_resume_payload,
@@ -170,6 +171,7 @@ def main() -> int:
                 instruction=args.instruction,
                 thread_id=thread_id,
                 resume=resume,
+                debug=True,
             )
         except Exception as exc:
             planner_result = {
@@ -315,17 +317,38 @@ def print_plain_result(
         print("mode       : resume")
     print("Planner Stage")
     print(f"status     : {planner_result.get('status', 'unknown')}")
+    stage_summary = build_stage_summary(planner_result)
+    if stage_summary:
+        print(f"stages     : {stage_summary}")
     if planner_result.get("status") == "ready":
         task_document = planner_result.get("task_document", {})
         print(f"task_id    : {task_document.get('task_id', '(missing)')}")
         print(f"steps      : {len(task_document.get('steps', []))}")
     elif planner_result.get("status") == "needs_human":
+        reason = planner_result.get("reason")
+        if reason:
+            print(f"reason     : {reason}")
+        missing_info = planner_result.get("missing_info", [])
+        if missing_info:
+            print(f"missing    : {', '.join(str(item) for item in missing_info)}")
         print("questions:")
         for question in planner_result.get("questions", []):
             print(f"- {question.get('question', '')}")
+        error = planner_result.get("error", {})
+        if isinstance(error, dict) and error:
+            print(f"error      : {error.get('type', 'unknown')} - {error.get('message', '')}")
+        log_path = planner_result.get("planner_log_path")
+        if log_path:
+            print(f"log_path   : {log_path}")
     else:
+        reason = planner_result.get("reason")
+        if reason:
+            print(f"reason     : {reason}")
         error = planner_result.get("error", {})
         print(f"error      : {error.get('type', 'unknown')} - {error.get('message', '')}")
+        log_path = planner_result.get("planner_log_path")
+        if log_path:
+            print(f"log_path   : {log_path}")
     if execution is None:
         return
     print("Execution Stage")
@@ -370,6 +393,9 @@ def _build_planner_table(planner_result: dict[str, Any]) -> Any:
     missing_info = planner_result.get("missing_info", [])
     if missing_info:
         table.add_row("missing", ", ".join(str(item) for item in missing_info))
+    stage_summary = build_stage_summary(planner_result)
+    if stage_summary:
+        table.add_row("stages", stage_summary)
 
     reason = planner_result.get("reason")
     if reason:

@@ -29,6 +29,7 @@ class FetchKeysScriptTests(unittest.TestCase):
         self.assertEqual("ok", payload["all"]["status"])
         self.assertIn("actors.goblin_1.hp.current", payload["all"]["items"])
         self.assertEqual("no_match", payload["no_match"]["status"])
+        self.assertTrue(payload["no_match"]["suggestions"])
 
     def test_script_cli_args_override_local_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

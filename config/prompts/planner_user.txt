@@ -35,15 +35,19 @@ Reference rules:
 - Use "when" for conditional execution.
 
 Path semantics:
-- fetch_keys and reads use bare store paths such as actors.goblin_1.ac, actors.aldera.hp, or actors.goblin_1.attacks.scimitar.to_hit.
-- Do not pass state.actors.goblin_1.ac directly to fetch_keys or reads.
+- list and read use bare store paths such as actors.goblin_1.ac, actors.aldera.hp, or actors.goblin_1.attacks.scimitar.to_hit.
+- Do not pass state.actors.goblin_1.ac directly to list or read.
 - TaskDocument $ref values keep engine namespaces, so the matching reference form is state.actors.goblin_1.ac.
 - Think of this as: tool path actors.goblin_1.ac -> TaskDocument $ref state.actors.goblin_1.ac.
 
 Tool responsibilities:
 - Use search for rule evidence.
-- Use fetch_keys to discover candidate bare store paths.
-- Use reads to confirm the current values on a small set of candidate bare store paths, such as actor ids, AC, HP, resources, or spell slots.
+- Use list to discover candidate bare store paths.
+- Use read to confirm the current values on a small set of candidate bare store paths, such as actor ids, AC, HP, resources, or spell slots.
+- When you already have a related group of candidate paths, batch them into a single read call instead of splitting them into many single-path reads.
+- When list or read returns `status=no_match`, treat that as evidence that the current state does not contain that path or value.
+- If list or read returns `status=no_match` with suggestions, you may try one suggestion-guided correction once. If it still fails, stop querying that fact and continue with the missing-state evidence you already have.
+- Use lint only after drafting a candidate TaskDocument, and do not repeat lint without new state or rule evidence.
 - Use lint to validate a candidate TaskDocument before returning status ready.
 
 DnD5e attack reminder:
@@ -143,8 +147,8 @@ Canonical example:
 }
 
 Tool-path example before writing the final TaskDocument:
-- fetch_keys prefix: actors
-- reads paths: ["actors.goblin_1.attacks.scimitar.to_hit", "actors.aldera.ac"]
+- list prefix: actors
+- read paths: ["actors.goblin_1.attacks.scimitar.to_hit", "actors.aldera.ac", "actors.goblin_1.ac"]
 - final TaskDocument refs: {"$ref": "state.actors.goblin_1.attacks.scimitar.to_hit"} and {"$ref": "state.actors.aldera.ac"}
 
 DM instruction:
@@ -153,20 +157,26 @@ DM instruction:
 Context JSON:
 {{context_json}}
 
-Policy JSON:
+ Policy JSON:
 {{policy_json}}
 
 Tool budget hint: {{tool_budget}}
 
-Use `search` for rule evidence and fetch_keys for bare store-path discovery before asking the DM.
-Use `reads` when bare store-path values are needed to confirm entity ids or key combat values.
-Do not pass state.* references directly into `fetch_keys` or `reads`.
+Use `search` for rule evidence and list for bare store-path discovery before asking the DM.
+Use `read` when bare store-path values are needed to confirm entity ids or key combat values.
+Batch related bare store-path checks into one `read` whenever you already know the candidate paths.
+Do not pass state.* references directly into `list` or `read`.
+If `list` or `read` returns `status=no_match`, treat that as evidence the current state does not contain that fact.
+If `list` or `read` returns `status=no_match` with suggested paths, you may try one suggestion-guided retry once; if that still fails, stop querying the same fact.
 When you write the final TaskDocument, convert a confirmed tool path like actors.aldera.ac into the $ref form state.actors.aldera.ac.
+Use lint only after drafting a candidate TaskDocument, and do not loop on lint without new evidence.
 Use lint to validate a candidate TaskDocument before returning status ready.
 
 If information is insufficient, return status needs_human with questions, missing_info, and assumptions.
 
 If you can produce a valid TaskDocument, return status ready with task_document.
+
+If the tool budget is exhausted after evidence gathering, stop calling tools and still return your best final structured result from the evidence you already have.
 
 Do not execute the task. Only plan it.
 

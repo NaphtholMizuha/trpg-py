@@ -5,10 +5,10 @@ import unittest
 
 from loguru import logger
 
-from trpg_py.agent.tools import create_reads_tool, read_paths
+from trpg_py.agent.tools import create_read_tool, read_paths
 
 
-class ReadsToolTests(unittest.TestCase):
+class ReadToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.log_output = io.StringIO()
         self.log_handler_id = logger.add(self.log_output, format="{message}")
@@ -43,25 +43,26 @@ class ReadsToolTests(unittest.TestCase):
         self.assertEqual("no_match", result.status)
         self.assertEqual("no_match", result.items[0].status)
 
-    def test_reads_tool_logs_success_and_no_match(self) -> None:
+    def test_read_tool_logs_success_and_no_match(self) -> None:
         state = {"actors": {"aldera": {"id": "aldera"}}}
-        tool = create_reads_tool(state=state)
+        tool = create_read_tool(state=state)
 
         ok_output = tool.invoke({"paths": ["actors.aldera.id"]})
         miss_output = tool.invoke({"paths": ["actors.goblin_1.id"]})
 
         self.assertEqual("ok", ok_output["status"])
         self.assertEqual("no_match", miss_output["status"])
+        self.assertIn("actors.aldera.id", miss_output["suggestions"])
         logs = self.log_output.getvalue()
-        self.assertIn("tool_input tool=reads paths=1", logs)
-        self.assertIn("tool_output tool=reads status=ok", logs)
-        self.assertIn("tool_output tool=reads status=no_match", logs)
+        self.assertIn("tool_input tool=read paths=1", logs)
+        self.assertIn("tool_output tool=read status=ok", logs)
+        self.assertIn("tool_output tool=read status=no_match", logs)
 
-    def test_reads_tool_returns_error_when_state_provider_fails(self) -> None:
+    def test_read_tool_returns_error_when_state_provider_fails(self) -> None:
         def broken_state_provider() -> dict[str, object]:
             raise RuntimeError("state unavailable")
 
-        tool = create_reads_tool(state_provider=broken_state_provider)
+        tool = create_read_tool(state_provider=broken_state_provider)
 
         output = tool.invoke({"paths": ["actors.aldera.id"]})
 

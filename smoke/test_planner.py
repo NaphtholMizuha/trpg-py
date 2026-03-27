@@ -33,7 +33,7 @@ DEFAULT_INSTRUCTION = "哥布林用弯刀攻击 aldera"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="使用真实 planner、真实 search 和真实 fetch_keys 链路做一次烟雾测试"
+        description="使用真实 planner、真实 search 和真实 list/read 链路做一次烟雾测试"
     )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="DM 指令文本")
     parser.add_argument(
@@ -136,7 +136,7 @@ def main() -> int:
                 instruction=args.instruction,
                 thread_id=thread_id,
                 resume=resume,
-                debug=args.debug,
+                debug=True,
             )
         except Exception as exc:
             payload = {
@@ -221,7 +221,7 @@ def print_human_result(
     print("=" * 72)
     print(f"instruction: {instruction}")
     print(f"config     : {config_path}")
-    print("tools      : search=real, fetch_keys=real, reads=real, lint=real")
+    print("tools      : search=real, list=real, read=real, lint=real")
     if thread_id:
         print(f"thread_id  : {thread_id}")
     if resumed:
@@ -229,6 +229,9 @@ def print_human_result(
     if debug:
         print("debug      : on")
     print(f"status     : {result.get('status', 'unknown')}")
+    stage_summary = build_stage_summary(result)
+    if stage_summary:
+        print(f"stages     : {stage_summary}")
 
     assumptions = result.get("assumptions", [])
     if assumptions:
@@ -275,7 +278,7 @@ def print_failure_summary(result: dict[str, Any]) -> None:
 
     error = result.get("error", {})
     printed_detail = False
-    if reason == "task_document_validation" and isinstance(error, dict):
+    if reason in {"task_document_validation", "tool_budget_exhausted"} and isinstance(error, dict):
         error_type = error.get("type")
         if error_type:
             print(f"error_type : {error_type}")
@@ -306,7 +309,8 @@ def print_debug_summary(result: dict[str, Any]) -> None:
             continue
         round_id = attempt.get("round", "?")
         input_mode = attempt.get("input_mode", "unknown")
-        print(f"- round {round_id} ({input_mode})")
+        phase = attempt.get("phase", "planning")
+        print(f"- {phase} round {round_id} ({input_mode})")
         validation_error = attempt.get("validation_error")
         if validation_error:
             print(f"  validation: {validation_error}")
@@ -319,6 +323,25 @@ def print_log_path_summary(result: dict[str, Any]) -> None:
     log_path = result.get("planner_log_path")
     if log_path:
         print(f"log_path   : {log_path}")
+
+
+def build_stage_summary(result: dict[str, Any]) -> str | None:
+    debug = result.get("debug")
+    if not isinstance(debug, dict):
+        return None
+    attempts = debug.get("attempts", [])
+    phases: list[str] = []
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        phase = attempt.get("phase")
+        if not isinstance(phase, str) or not phase:
+            continue
+        if not phases or phases[-1] != phase:
+            phases.append(phase)
+    if not phases:
+        return None
+    return " -> ".join(phases)
 
 
 if __name__ == "__main__":

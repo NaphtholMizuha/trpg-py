@@ -56,7 +56,7 @@ python -B -m unittest discover -s tests -v
 
 这四类工具在每次调用时都会通过 `loguru` 自动记录输入和输出摘要，方便排查 planner 或其他 agent 的工具使用情况。
 
-现在还提供一个基于 Deep Agents 的 planner 入口：
+现在还提供一个基于 LangChain `create_agent()` 的 planner 入口：
 
 - `trpg_py.agent.create_planner`：把 DM 指令规划成 `TaskDocument`，或在信息不足时返回结构化澄清问题
 
@@ -184,11 +184,11 @@ planner = create_planner(
     api_key="your-api-key",
     timeout=120,
     max_retries=6,
-    interrupt_on={"human": True},
+    interrupt_on={"search": True},
 )
 ```
 
-默认情况下，planner factory 会先读取 `config/config.toml`，再用你显式传入的参数做覆写。若启用了 `interrupt_on`，factory 会为 Deep Agents 自动准备内存 checkpointer。
+默认情况下，planner factory 会先读取 `config/config.toml`，再用你显式传入的参数做覆写。若启用了 `interrupt_on`，factory 会为基于 `create_agent()` 的 planner 自动准备内存 checkpointer，并把对应工具接入 HITL middleware。
 
 planner 的默认 prompt 也通过统一配置管理。你可以直接编辑 `config/prompts/planner_system.txt` 和 `config/prompts/planner_user.txt`，并在 `config/config.toml` 的 `[planner.prompt]` 段切换目录或模板文件，而不必再修改 `trpg_py/agent/planner.py`。
 
