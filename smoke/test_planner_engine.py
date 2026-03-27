@@ -179,6 +179,9 @@ def main() -> int:
                     "message": str(exc),
                 },
             }
+            log_path = getattr(planner, "last_run_log_path", None)
+            if log_path:
+                planner_result["planner_log_path"] = str(log_path)
 
         if planner_result.get("status") == "ready":
             task_document = planner_result.get("task_document", {})
@@ -376,11 +379,17 @@ def _build_planner_table(planner_result: dict[str, Any]) -> Any:
         task_document = planner_result.get("task_document", {})
         table.add_row("task_id", str(task_document.get("task_id", "(missing)")))
         table.add_row("steps", str(len(task_document.get("steps", []))))
+        log_path = planner_result.get("planner_log_path")
+        if log_path:
+            table.add_row("log_path", str(log_path))
         return table
 
     error = planner_result.get("error", {})
     if isinstance(error, dict) and error:
         table.add_row("error", f"{error.get('type', 'unknown')} - {error.get('message', '')}")
+    log_path = planner_result.get("planner_log_path")
+    if log_path:
+        table.add_row("log_path", str(log_path))
     return table
 
 
@@ -414,6 +423,9 @@ def _build_failure_panel(planner_result: dict[str, Any]) -> Any | None:
     if isinstance(error, dict) and error:
         table.add_row("error_type", str(error.get("type", "unknown")))
         table.add_row("detail", str(error.get("message", "")))
+    log_path = planner_result.get("planner_log_path")
+    if log_path:
+        table.add_row("log_path", str(log_path))
     return Panel.fit(table, title="Failure Detail")
 
 

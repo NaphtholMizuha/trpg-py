@@ -3,14 +3,24 @@ from __future__ import annotations
 import importlib
 import json
 import re
+import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from langchain.agents.structured_output import StructuredOutputValidationError, ToolStrategy
 from langchain.chat_models import init_chat_model
 from langgraph.types import Command
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError, model_validator
 
+from trpg_py.agent.planner_logging import (
+    build_planner_log_path,
+    resolve_project_root,
+    serialize_for_log,
+    summarize_ai_message,
+)
 from trpg_py.agent.task_document import TASK_DOCUMENT_OUTPUT_SCHEMA, validate_candidate_task_document
 from trpg_py.agent.tools import (
     FetchKeysTool,
@@ -119,6 +129,7 @@ class Planner:
         *,
         agent: Any,
         config: PlannerFactoryConfig,
+        project_root: Path,
         search_tool: SearchTool,
         fetch_keys_tool: FetchKeysTool,
         reads_tool: ReadsTool,
@@ -126,98 +137,192 @@ class Planner:
     ) -> None:
         self.agent = agent
         self.config = config
+        self.project_root = project_root
         self.search_tool = search_tool
         self.fetch_keys_tool = fetch_keys_tool
         self.reads_tool = reads_tool
         self.lint_tool = lint_tool
+        self.last_run_id: str | None = None
+        self.last_run_log_path: str | None = None
 
     def plan(self, request: PlannerRequest | dict[str, Any]) -> PlannerResult:
         planner_request = PlannerRequest.model_validate(request)
+        run_id = uuid4().hex[:12]
         thread_id = planner_request.thread_id or self._resolve_thread_id(planner_request)
         run_config = self._build_run_config(thread_id)
         validation_feedback: str | None = None
         last_validation_error: Exception | None = None
         debug_attempts: list[PlannerDebugAttempt] = []
+        log_path = build_planner_log_path(self.project_root, run_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        sink_id = logger.add(log_path, serialize=True, level="INFO", diagnose=False, backtrace=False)
+        self.last_run_id = run_id
+        self.last_run_log_path = str(log_path)
 
-        for round_index in range(1, self.config.max_planning_rounds + 1):
-            try:
-                raw_response = self.agent.invoke(
-                    self._build_agent_input(
+        result: PlannerResult | None = None
+        try:
+            with logger.contextualize(planner_run_id=run_id, planner_thread_id=thread_id or "-", planner_round="-", planner_input_mode="-"):
+                logger.bind(
+                    planner_event="run_start",
+                    planner_instruction=serialize_for_log(planner_request.instruction),
+                    planner_context=serialize_for_log(planner_request.context),
+                    planner_policy=serialize_for_log(planner_request.policy),
+                    planner_debug=planner_request.debug,
+                    planner_model=serialize_for_log(self.config.model),
+                    planner_tool_budget=self.config.tool_budget,
+                    planner_max_rounds=self.config.max_planning_rounds,
+                    planner_log_path=str(log_path),
+                ).info("planner run started")
+
+                for round_index in range(1, self.config.max_planning_rounds + 1):
+                    input_mode: Literal["prompt", "resume"] = "resume" if planner_request.resume is not None else "prompt"
+                    agent_input = self._build_agent_input(
                         planner_request,
                         validation_feedback=validation_feedback,
-                    ),
-                    config=run_config,
-                )
-            except Exception as exc:
-                return PlannerResult(
-                    status="blocked",
-                    reason="agent_error",
-                    error=PlannerError(type=exc.__class__.__name__, message=str(exc)),
-                    debug=self._build_debug_info(
-                        planner_request,
-                        attempts=debug_attempts,
-                        failure_stage="agent_error",
-                        failure_message=str(exc),
-                    ),
-                )
+                    )
+                    with logger.contextualize(
+                        planner_run_id=run_id,
+                        planner_thread_id=thread_id or "-",
+                        planner_round=str(round_index),
+                        planner_input_mode=input_mode,
+                    ):
+                        logger.bind(
+                            planner_event="round_start",
+                            planner_round_index=round_index,
+                            planner_input_snapshot=self._snapshot_request_input(agent_input),
+                            planner_validation_feedback=serialize_for_log(validation_feedback),
+                        ).info("planner round started")
+                        try:
+                            raw_response = self.agent.invoke(agent_input, config=run_config)
+                        except Exception as exc:
+                            logger.bind(
+                                planner_event="agent_error",
+                                planner_round_index=round_index,
+                                planner_error_type=exc.__class__.__name__,
+                                planner_error_detail=self._build_exception_log_payload(exc),
+                                planner_traceback=traceback.format_exc(),
+                            ).error("planner round failed during agent invoke")
+                            result = PlannerResult(
+                                status="blocked",
+                                reason="agent_error",
+                                error=PlannerError(type=exc.__class__.__name__, message=str(exc)),
+                                debug=self._build_debug_info(
+                                    planner_request,
+                                    attempts=debug_attempts,
+                                    failure_stage="agent_error",
+                                    failure_message=str(exc),
+                                ),
+                            )
+                            break
 
-            self._append_debug_attempt(
-                planner_request,
-                attempts=debug_attempts,
-                round_index=round_index,
-                raw_response=raw_response,
-                repair_feedback=validation_feedback,
-            )
+                        logger.bind(
+                            planner_event="round_response",
+                            planner_round_index=round_index,
+                            planner_response_type=type(raw_response).__name__,
+                            planner_response_snapshot=self._snapshot_response(raw_response),
+                        ).info("planner round returned a response")
 
-            interrupt_result = self._coerce_interrupt_result(raw_response, thread_id=thread_id)
-            if interrupt_result is not None:
-                interrupt_result.reason = "human_review"
-                interrupt_result.debug = self._build_debug_info(
-                    planner_request,
-                    attempts=debug_attempts,
-                    failure_stage="human_review",
-                    failure_message="planner run paused for human review",
-                )
-                return interrupt_result
+                        self._append_debug_attempt(
+                            planner_request,
+                            attempts=debug_attempts,
+                            round_index=round_index,
+                            raw_response=raw_response,
+                            repair_feedback=validation_feedback,
+                        )
 
-            try:
-                result = self._coerce_planner_result(raw_response)
-                if result.status == "ready":
-                    self._validate_ready_task_document(result.task_document)
-                result.debug = self._build_debug_info(planner_request, attempts=debug_attempts)
+                        interrupt_result = self._coerce_interrupt_result(raw_response, thread_id=thread_id)
+                        if interrupt_result is not None:
+                            interrupt_result.reason = "human_review"
+                            interrupt_result.debug = self._build_debug_info(
+                                planner_request,
+                                attempts=debug_attempts,
+                                failure_stage="human_review",
+                                failure_message="planner run paused for human review",
+                            )
+                            logger.bind(
+                                planner_event="human_review",
+                                planner_round_index=round_index,
+                                planner_interrupt_snapshot=self._snapshot_response(raw_response),
+                            ).info("planner run paused for human review")
+                            result = interrupt_result
+                            break
+
+                        try:
+                            candidate_result = self._coerce_planner_result(raw_response)
+                            if candidate_result.status == "ready":
+                                self._validate_ready_task_document(candidate_result.task_document)
+                            candidate_result.debug = self._build_debug_info(planner_request, attempts=debug_attempts)
+                            logger.bind(
+                                planner_event="round_result",
+                                planner_round_index=round_index,
+                                planner_status=candidate_result.status,
+                                planner_reason=candidate_result.reason,
+                            ).info("planner round produced a valid result")
+                            result = candidate_result
+                            break
+                        except (PydanticValidationError, ValidationError, DiceError, ValueError, TypeError) as exc:
+                            last_validation_error = exc
+                            if debug_attempts:
+                                debug_attempts[-1].validation_error = str(exc)
+                            validation_feedback = (
+                                "Your previous structured output was invalid. "
+                                f"Repair it so it satisfies the schema and engine constraints: {exc}"
+                            )
+                            logger.bind(
+                                planner_event="round_validation_failed",
+                                planner_round_index=round_index,
+                                planner_validation_error=str(exc),
+                                planner_validation_feedback=validation_feedback,
+                            ).warning("planner round produced an invalid structured result")
+
+                if result is None:
+                    message = str(last_validation_error or "planner output repair budget exhausted")
+                    result = PlannerResult(
+                        status="needs_human",
+                        questions=[
+                            PlannerQuestion(
+                                question="当前规划流程未能产出合法 TaskDocument。请检查调试信息，必要时再补充动作细节。",
+                                missing_info="task_document_validation",
+                                why=message,
+                            )
+                        ],
+                        missing_info=["task_document_validation"],
+                        reason="task_document_validation",
+                        error=PlannerError(
+                            type=last_validation_error.__class__.__name__ if last_validation_error else "planner_validation_error",
+                            message=message,
+                        ),
+                        debug=self._build_debug_info(
+                            planner_request,
+                            attempts=debug_attempts,
+                            failure_stage="schema_or_semantic_validation",
+                            failure_message=message,
+                        ),
+                    )
+                    logger.bind(
+                        planner_event="repair_budget_exhausted",
+                        planner_error_type=result.error.type if result.error else "planner_validation_error",
+                        planner_error_message=message,
+                    ).warning("planner exhausted its repair budget")
+
+                logger.bind(
+                    planner_event="run_end",
+                    planner_status=result.status,
+                    planner_reason=result.reason,
+                    planner_error_type=result.error.type if result.error else None,
+                    planner_error_message=result.error.message if result.error else None,
+                ).info("planner run finished")
                 return result
-            except (PydanticValidationError, ValidationError, DiceError, ValueError, TypeError) as exc:
-                last_validation_error = exc
-                if debug_attempts:
-                    debug_attempts[-1].validation_error = str(exc)
-                validation_feedback = (
-                    "Your previous structured output was invalid. "
-                    f"Repair it so it satisfies the schema and engine constraints: {exc}"
-                )
-
-        message = str(last_validation_error or "planner output repair budget exhausted")
-        return PlannerResult(
-            status="needs_human",
-            questions=[
-                PlannerQuestion(
-                    question="当前规划流程未能产出合法 TaskDocument。请检查调试信息，必要时再补充动作细节。",
-                    missing_info="task_document_validation",
-                    why=message,
-                )
-            ],
-            missing_info=["task_document_validation"],
-            reason="task_document_validation",
-            error=PlannerError(
-                type=last_validation_error.__class__.__name__ if last_validation_error else "planner_validation_error",
-                message=message,
-            ),
-            debug=self._build_debug_info(
-                planner_request,
-                attempts=debug_attempts,
-                failure_stage="schema_or_semantic_validation",
-                failure_message=message,
-            ),
-        )
+        except Exception as exc:
+            logger.bind(
+                planner_event="unexpected_error",
+                planner_error_type=exc.__class__.__name__,
+                planner_error_detail=self._build_exception_log_payload(exc),
+                planner_traceback=traceback.format_exc(),
+            ).error("planner run crashed unexpectedly")
+            raise
+        finally:
+            logger.remove(sink_id)
 
     def _coerce_planner_result(self, raw_response: Any) -> PlannerResult:
         payload = raw_response
@@ -410,6 +515,31 @@ class Planner:
             template_kind="planner user prompt",
         )
 
+    def _snapshot_request_input(self, agent_input: Any) -> Any:
+        if isinstance(agent_input, Command):
+            return {"resume": serialize_for_log(getattr(agent_input, "resume", None))}
+        if isinstance(agent_input, dict):
+            return serialize_for_log(agent_input)
+        return serialize_for_log(agent_input)
+
+    def _build_exception_log_payload(self, exc: Exception) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "type": exc.__class__.__name__,
+            "message": str(exc),
+        }
+        if isinstance(exc, StructuredOutputValidationError):
+            payload["tool_name"] = exc.tool_name
+            payload["source"] = serialize_for_log(str(exc.source))
+            payload["ai_message"] = summarize_ai_message(exc.ai_message)
+        else:
+            source = getattr(exc, "source", None)
+            if source is not None:
+                payload["source"] = serialize_for_log(str(source))
+            ai_message = getattr(exc, "ai_message", None)
+            if ai_message is not None:
+                payload["ai_message"] = summarize_ai_message(ai_message)
+        return payload
+
 
 def create_planner(
     *,
@@ -476,17 +606,19 @@ def create_planner(
     reads = reads_tool or create_reads_tool(state=state, state_provider=state_provider)
     lint = lint_tool or create_lint_tool()
     resolved_model = (model_builder or build_planner_model)(config)
+    project_root = resolve_project_root(config_path)
     deep_agent = (agent_factory or _load_default_agent_factory())(
         model=resolved_model,
         tools=[search, fetch_keys, reads, lint],
         system_prompt=_build_system_prompt(config),
-        response_format=PlannerResult,
+        response_format=ToolStrategy(PlannerResult),
         checkpointer=_resolve_checkpointer(config, checkpointer),
         interrupt_on=config.interrupt_on or None,
     )
     return Planner(
         agent=deep_agent,
         config=config,
+        project_root=project_root,
         search_tool=search,
         fetch_keys_tool=fetch_keys,
         reads_tool=reads,

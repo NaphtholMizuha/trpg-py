@@ -1,5 +1,5 @@
 [planner]
-model = "openai:gpt-4.1-mini"
+model = "gpt-4.1-mini"
 base_url = "https://api.lingyaai.cn/v1"
 api_key_env = "LINGYA_API_KEY"
 timeout = 120.0

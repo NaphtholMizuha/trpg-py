@@ -13,7 +13,6 @@ reads 工具演示脚本
 import argparse
 import json
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from smoke.state_loader import load_toml_state
 from trpg_py.agent.tools import create_reads_tool
-from trpg_py.store.compat import set_path
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "config" / "world_state.toml"
@@ -49,11 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_state(path: str | Path) -> dict[str, Any]:
-    payload = tomllib.loads(Path(path).read_text(encoding="utf-8"))
-    state: dict[str, Any] = {}
-    for state_path, value in payload.items():
-        set_path(state, state_path, value)
-    return state
+    return load_toml_state(path)
 
 
 def main() -> int:

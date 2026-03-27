@@ -139,7 +139,9 @@ python smoke/test_planner.py --instruction "张三用长剑攻击地精" --json
 
 `smoke/test_planner.py` 默认的人类可读输出现在会直接展示 `task_document_validation` 这类内部校验失败的具体原因；如果你还想看轮次轨迹、修复反馈和更完整的调试信息，再追加 `--debug`。
 
-planner smoke 默认 world state 也不再是脚本内联的小字典，而是通过 `config/config.toml` 指向 `config/world_state.toml`。这份文件使用点分路径平铺 key，便于你直接补充角色、装备、攻击和环境信息。
+planner 现在还会为每次真实运行自动写入一份详细日志到项目内 `logs/planner/<date>/` 目录。遇到 `blocked` 或其他难以解释的 planner 故障时，优先查看 smoke 输出里提示的 `log_path`，再去对应日志文件中看 run 元数据、轮次边界、修复反馈和结构化输出异常细节。
+
+planner smoke 默认 world state 也不再是脚本内联的小字典，而是通过 `config/config.toml` 指向 `config/world_state.toml`。这份文件现在使用正常的嵌套 TOML 结构来表达角色、装备、攻击和环境信息；运行时仍然保持现有点路径访问语义，所以你依旧可以通过 `actors.goblin_1.ac` 这类路径做 `fetch_keys`、`reads` 和 `$ref` 引用。
 
 如果规划过程命中 HITL，中间结果在普通人类可读模式下不会直接结束；脚本会显示 `resume.thread_id`、等待你输入 `approve` / `reject` 或原始 JSON，再在同一线程里继续规划。
 

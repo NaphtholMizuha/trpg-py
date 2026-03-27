@@ -27,14 +27,19 @@ def write_project_config(
     ),
     planner_smoke_world_state_file: str = "world_state.toml",
     planner_smoke_world_state_template: str = (
-        "\"actors.goblin_1.id\" = \"goblin_1\"\n"
-        "\"actors.goblin_1.ac\" = 13\n"
-        "\"actors.goblin_1.hp\" = { current = 7, max = 7 }\n"
-        "\"actors.goblin_1.attacks.scimitar.to_hit\" = 4\n"
-        "\"actors.goblin_1.attacks.scimitar.damage\" = [{ dice = \"1d6\", bonus = 2, damage_type = \"slashing\" }]\n"
-        "\"actors.hero_1.id\" = \"hero_1\"\n"
-        "\"actors.hero_1.ac\" = 16\n"
-        "\"actors.hero_1.hp\" = { current = 20, max = 20 }\n"
+        "[actors.goblin_1]\n"
+        "id = \"goblin_1\"\n"
+        "ac = 13\n"
+        "hp = { current = 7, max = 7 }\n"
+        "\n"
+        "[actors.goblin_1.attacks.scimitar]\n"
+        "to_hit = 4\n"
+        "damage = [{ dice = \"1d6\", bonus = 2, damage_type = \"slashing\" }]\n"
+        "\n"
+        "[actors.hero_1]\n"
+        "id = \"hero_1\"\n"
+        "ac = 16\n"
+        "hp = { current = 20, max = 20 }\n"
     ),
     search_base_url: str = "https://search.example/v1",
     search_api_key_env: str = "SEARCH_API_KEY",

@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from langchain.agents.structured_output import StructuredOutputValidationError, ToolStrategy
+from langchain_core.messages import AIMessage
 from langgraph.types import Interrupt
 
 from tests.config_helpers import write_project_config
@@ -53,6 +55,34 @@ class FakeAgentFactory:
     def __call__(self, **kwargs: object) -> FakeDeepAgent:
         self.calls.append(kwargs)
         self.agent = FakeDeepAgent(responses=self.responses, error=self.error)
+        return self.agent
+
+
+class ToolCallingAgentFactory:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.agent: FakeDeepAgent | None = None
+
+    def __call__(self, **kwargs: object) -> FakeDeepAgent:
+        self.calls.append(kwargs)
+        tools = {tool.name: tool for tool in kwargs["tools"]}
+
+        class _Agent:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def invoke(self, payload: object, config: dict[str, object] | None = None) -> object:
+                self.calls.append({"input": payload, "config": config})
+                tools["fetch_keys"].invoke({"prefix": "actors"})
+                return {
+                    "structured_response": {
+                        "status": "needs_human",
+                        "questions": [{"question": "Which goblin?"}],
+                        "missing_info": ["target_id"],
+                    }
+                }
+
+        self.agent = _Agent()
         return self.agent
 
 
@@ -180,6 +210,8 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual("System prompt budget 7", agent_factory.calls[0]["system_prompt"])
         self.assertEqual({"human": True}, agent_factory.calls[0]["interrupt_on"])
         self.assertIsNotNone(agent_factory.calls[0]["checkpointer"])
+        self.assertIsInstance(agent_factory.calls[0]["response_format"], ToolStrategy)
+        self.assertEqual(["PlannerResult"], [spec.name for spec in agent_factory.calls[0]["response_format"].schema_specs])
         self.assertEqual(["search", "fetch_keys", "reads", "lint"], [tool.name for tool in agent_factory.calls[0]["tools"]])
         self.assertEqual("openai:test-model", captured_config[0].model)
 
@@ -644,6 +676,117 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNotNone(result.debug)
         self.assertEqual("agent_error", result.debug.failure_stage)
         self.assertEqual("llm unavailable", result.debug.failure_message)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_plan_writes_run_log_file_for_successful_run(self) -> None:
+        valid_document = {
+            "task_id": "goblin_scimitar_attack",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "attack_roll",
+                    "type": "check",
+                    "kind": "attack",
+                    "args": {"dice": "1d20", "modifier": 4, "target_id": "hero_1", "target_ac": 16},
+                }
+            ],
+        }
+        agent_factory = FakeAgentFactory(
+            responses=[
+                {
+                    "structured_response": {
+                        "status": "ready",
+                        "task_document": valid_document,
+                    }
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+            result = planner.plan({"instruction": "Attack the goblin"})
+
+            self.assertEqual("ready", result.status)
+            self.assertIsNotNone(planner.last_run_log_path)
+            log_path = Path(planner.last_run_log_path)
+            self.assertTrue(log_path.exists())
+            self.assertIn(str(Path(temp_dir) / "logs" / "planner"), str(log_path))
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("planner run started", log_text)
+            self.assertIn("planner round started", log_text)
+            self.assertIn("planner run finished", log_text)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_plan_logs_structured_output_validation_error_details(self) -> None:
+        structured_error = StructuredOutputValidationError(
+            "PlannerResult",
+            ValueError("Extra data: line 2 column 1"),
+            AIMessage(content='{"status":"ready"}\nextra output'),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=FakeAgentFactory(error=structured_error),
+            )
+
+            result = planner.plan({"instruction": "Cast fireball", "debug": True})
+
+            self.assertEqual("blocked", result.status)
+            self.assertEqual("agent_error", result.reason)
+            self.assertIsNotNone(planner.last_run_log_path)
+            log_path = Path(planner.last_run_log_path)
+            self.assertTrue(log_path.exists())
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("StructuredOutputValidationError", log_text)
+            self.assertIn("PlannerResult", log_text)
+            self.assertIn("Extra data: line 2 column 1", log_text)
+            self.assertIn("extra output", log_text)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_plan_log_file_correlates_tool_logs_with_round_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            agent_factory = ToolCallingAgentFactory()
+            planner = create_planner(
+                config_path=str(config_path),
+                state={"actors": {"aldera": {"ac": 18}, "goblin_1": {"hp": {"current": 7}}}},
+                search_tool=DummyTool("search"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+            result = planner.plan({"instruction": "Inspect current actors"})
+
+            self.assertEqual("needs_human", result.status)
+            self.assertIsNotNone(planner.last_run_log_path)
+            log_text = Path(planner.last_run_log_path).read_text(encoding="utf-8")
+            self.assertIn("tool_input tool=fetch_keys prefix='actors'", log_text)
+            self.assertIn('"planner_round": "1"', log_text)
 
     @patch.dict(
         os.environ,

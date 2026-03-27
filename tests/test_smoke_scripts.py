@@ -101,6 +101,7 @@ def run_planner_script(
     planner_payload: dict[str, object] | list[dict[str, object]] | None = None,
     planner_error: Exception | None = None,
     create_error: Exception | None = None,
+    planner_log_path: str | None = None,
     user_inputs: list[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
     buffer = io.StringIO()
@@ -112,6 +113,8 @@ def run_planner_script(
         if create_error is not None:
             raise create_error
         planner = FakePlanner(payload=planner_payload, error=planner_error)
+        if planner_log_path is not None:
+            planner.last_run_log_path = planner_log_path
         created["planner"] = planner
         return planner
 
@@ -192,6 +195,7 @@ def run_planner_engine_script(
     planner_payload: dict[str, object] | list[dict[str, object]] | None = None,
     planner_error: Exception | None = None,
     create_error: Exception | None = None,
+    planner_log_path: str | None = None,
     execute_payload: dict[str, object] | None = None,
     execute_error: Exception | None = None,
     user_inputs: list[str] | None = None,
@@ -206,6 +210,8 @@ def run_planner_engine_script(
         if create_error is not None:
             raise create_error
         planner = FakePlanner(payload=planner_payload, error=planner_error)
+        if planner_log_path is not None:
+            planner.last_run_log_path = planner_log_path
         created["planner"] = planner
         return planner
 
@@ -317,9 +323,12 @@ class SmokePlannerScriptTests(unittest.TestCase):
             config_path = write_project_config(
                 Path(temp_dir) / "config.toml",
                 planner_smoke_world_state_template=(
-                    "\"actors.hero_1.id\" = \"hero_1\"\n"
-                    "\"actors.hero_1.hp\" = { current = 12, max = 20 }\n"
-                    "\"environment.scene\" = \"测试战场\"\n"
+                    "[actors.hero_1]\n"
+                    "id = \"hero_1\"\n"
+                    "hp = { current = 12, max = 20 }\n"
+                    "\n"
+                    "[environment]\n"
+                    "scene = \"测试战场\"\n"
                 ),
             )
 
@@ -495,6 +504,19 @@ class SmokePlannerScriptTests(unittest.TestCase):
         self.assertEqual("schema_or_semantic_validation", payload["debug"]["failure_stage"])
         self.assertEqual(1, payload["debug"]["attempts"][0]["round"])
 
+    def test_planner_smoke_script_includes_planner_log_path_in_json_output(self) -> None:
+        output, _ = run_planner_script(
+            "--json",
+            planner_payload={
+                "status": "ready",
+                "task_document": {"task_id": "goblin_scimitar_attack", "steps": [{}]},
+            },
+            planner_log_path="/tmp/planner/run.log",
+        )
+        payload = json.loads(output)
+
+        self.assertEqual("/tmp/planner/run.log", payload["planner_log_path"])
+
     def test_planner_smoke_script_prints_debug_summary(self) -> None:
         output, _ = run_planner_script(
             "--debug",
@@ -522,6 +544,17 @@ class SmokePlannerScriptTests(unittest.TestCase):
         self.assertIn("failure    : schema_or_semantic_validation", output)
         self.assertIn("detail     : Unsupported step type 'oops'", output)
         self.assertIn("debug_try  : 1", output)
+
+    def test_planner_smoke_script_prints_log_path_summary(self) -> None:
+        output, _ = run_planner_script(
+            planner_payload={
+                "status": "blocked",
+                "error": {"type": "RuntimeError", "message": "planner backend unavailable"},
+            },
+            planner_log_path="/tmp/planner/run.log",
+        )
+
+        self.assertIn("log_path   : /tmp/planner/run.log", output)
 
 
 class SmokePlannerEngineScriptTests(unittest.TestCase):
@@ -572,10 +605,12 @@ class SmokePlannerEngineScriptTests(unittest.TestCase):
                 "status": "blocked",
                 "error": {"type": "RuntimeError", "message": "planner backend unavailable"},
             },
+            planner_log_path="/tmp/planner/run.log",
         )
 
         self.assertIn("Planner Stage", output)
         self.assertIn("blocked", output)
+        self.assertIn("/tmp/planner/run.log", output)
         self.assertNotIn("engine_calls", captured)
 
     def test_planner_engine_smoke_script_stops_when_tester_quits_hitl(self) -> None:

@@ -23,9 +23,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from smoke.state_loader import load_toml_state
 from trpg_py.agent import PlannerRequest, create_planner
 from trpg_py.config import DEFAULT_PROJECT_CONFIG_PATH, load_project_config, resolve_path_from_config
-from trpg_py.store.compat import set_path
 
 
 DEFAULT_INSTRUCTION = "哥布林用弯刀攻击 aldera"
@@ -59,20 +59,15 @@ def load_demo_state(config_path: str) -> dict[str, Any]:
         config_path=config_path,
     )
     try:
-        payload = tomllib.loads(world_state_path.read_text(encoding="utf-8"))
+        return load_toml_state(world_state_path)
     except FileNotFoundError as exc:
         raise RuntimeError(f"Planner smoke world state file was not found: {world_state_path}") from exc
     except OSError as exc:
         raise RuntimeError(f"Failed to read planner smoke world state file {world_state_path}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise RuntimeError(f"Planner smoke world state file is not valid TOML: {world_state_path}: {exc}") from exc
-
-    state: dict[str, Any] = {}
-    for path, value in payload.items():
-        if not isinstance(path, str) or not path.strip():
-            raise RuntimeError(f"Planner smoke world state contains invalid path key: {path!r}")
-        set_path(state, path, value)
-    return state
+    except ValueError as exc:
+        raise RuntimeError(f"Planner smoke world state file must contain a TOML table root: {world_state_path}: {exc}") from exc
 
 
 def run_planner(
@@ -91,12 +86,17 @@ def run_planner(
             debug=debug,
         )
     )
-    return result.model_dump(exclude_none=True)
+    payload = result.model_dump(exclude_none=True)
+    log_path = getattr(planner, "last_run_log_path", None)
+    if log_path:
+        payload["planner_log_path"] = str(log_path)
+    return payload
 
 
 def main() -> int:
     args = build_parser().parse_args()
     config_path = str(Path(args.config).expanduser())
+    planner: Any | None = None
     while True:
         try:
             state = load_demo_state(config_path)
@@ -109,6 +109,9 @@ def main() -> int:
                     "message": str(exc),
                 },
             }
+            log_path = getattr(planner, "last_run_log_path", None) if planner is not None else None
+            if log_path:
+                payload["planner_log_path"] = str(log_path)
             if args.json:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return 0
@@ -241,6 +244,7 @@ def print_human_result(
         task_document = result.get("task_document", {})
         print(f"task_id    : {task_document.get('task_id', '(missing)')}")
         print(f"steps      : {len(task_document.get('steps', []))}")
+        print_log_path_summary(result)
         print_debug_summary(result)
         return 0
 
@@ -252,12 +256,14 @@ def print_human_result(
         if isinstance(resume, dict) and resume.get("thread_id"):
             print(f"resume     : {resume['thread_id']}")
         print_failure_summary(result)
+        print_log_path_summary(result)
         print_debug_summary(result)
         return 0
 
     error = result.get("error", {})
     print(f"error      : {error.get('type', 'unknown')} - {error.get('message', '')}")
     print_failure_summary(result)
+    print_log_path_summary(result)
     print_debug_summary(result)
     return 0
 
@@ -307,6 +313,12 @@ def print_debug_summary(result: dict[str, Any]) -> None:
         repair_feedback = attempt.get("repair_feedback")
         if repair_feedback:
             print("  repaired : yes")
+
+
+def print_log_path_summary(result: dict[str, Any]) -> None:
+    log_path = result.get("planner_log_path")
+    if log_path:
+        print(f"log_path   : {log_path}")
 
 
 if __name__ == "__main__":

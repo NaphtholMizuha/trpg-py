@@ -330,6 +330,14 @@ planner 必须支持把 instruction、context、policy、tool budget 和 repair 
 - **那么** 返回体必须包含结构化的 debug 负载
 - **那么** 该负载必须可用于自动测试断言或人工复制排查
 
+### 需求:planner smoke 脚本必须从正常嵌套 TOML 载入默认 world state
+系统必须让 `smoke/test_planner.py` 在读取默认 world state 文件时直接消费正常嵌套 TOML 结构，禁止继续要求默认 fixture 以扁平点路径键格式书写。
+
+#### 场景:planner smoke 读取默认 world state
+- **当** 开发者运行 `smoke/test_planner.py` 且默认 state 来源为 `config/world_state.toml`
+- **那么** 脚本可以直接从嵌套 TOML 解析结果构造 planner 使用的 state
+- **那么** 脚本不再依赖“顶层 TOML key 本身是点路径”这一特殊约定
+
 ### 需求:planner prompt 必须显式教授 TaskDocument DSL
 系统必须让 planner 使用的提示词显式描述合法 `TaskDocument` 的最小结构、允许的步骤 `type/kind` 组合、引用约定和至少一个代表性规范示例，禁止仅以“生成 TaskDocument”之类的抽象描述要求模型自行猜测 DSL。
 
@@ -385,4 +393,3 @@ planner 必须支持把 instruction、context、policy、tool budget 和 repair 
 - **当** prompt 提供 canonical example、工具说明或路径示例
 - **那么** 相邻内容中必须可见从 `actors...` 裸路径到 `state.actors...` 引用路径的对应关系
 - **那么** 开发者和模型都可以看出 planner 应先用工具确认真实路径，再把该路径写入最终 `$ref`
-
