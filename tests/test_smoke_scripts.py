@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smoke import test_linter, test_planner, test_planner_engine, test_reads, test_search
+from smoke import test_grep, test_linter, test_planner, test_planner_engine, test_reads, test_search
 from tests.config_helpers import write_project_config
 from trpg_py.config import DEFAULT_PROJECT_CONFIG_PATH
 
@@ -64,6 +64,19 @@ def run_reads_script(*args: str) -> tuple[str, dict[str, object]]:
             raise_code = test_reads.main()
     if raise_code not in (None, 0):
         raise AssertionError(f"reads smoke script returned unexpected code: {raise_code}")
+    if "--json" in args:
+        payload = json.loads(buffer.getvalue())
+    return buffer.getvalue(), payload
+
+
+def run_grep_script(*args: str) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    payload: dict[str, object] = {}
+    with patch("sys.argv", ["test_grep.py", *args]):
+        with redirect_stdout(buffer):
+            raise_code = test_grep.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"grep smoke script returned unexpected code: {raise_code}")
     if "--json" in args:
         payload = json.loads(buffer.getvalue())
     return buffer.getvalue(), payload
@@ -288,6 +301,25 @@ class SmokeReadsScriptTests(unittest.TestCase):
         self.assertIn("suggestions:", output)
 
 
+class SmokeGrepScriptTests(unittest.TestCase):
+    def test_grep_smoke_script_supports_json_output(self) -> None:
+        _, payload = run_grep_script("--json")
+
+        self.assertEqual("ok", payload["query"]["status"])
+        self.assertEqual("ok", payload["terms"]["status"])
+        self.assertEqual("no_match", payload["no_match"]["status"])
+        self.assertTrue(payload["query"]["matches"])
+
+    def test_grep_smoke_script_prints_human_summary(self) -> None:
+        output, _ = run_grep_script()
+
+        self.assertIn("TRPG Agent Grep Smoke Test", output)
+        self.assertIn("query demo :", output)
+        self.assertIn("terms demo :", output)
+        self.assertIn("status     : ok", output)
+        self.assertIn("status     : no_match", output)
+
+
 class SmokePlannerScriptTests(unittest.TestCase):
     def test_planner_smoke_script_uses_real_entrypoint_defaults(self) -> None:
         output, captured = run_planner_script(
@@ -318,7 +350,7 @@ class SmokePlannerScriptTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("tools      : search=real, list=real, read=real, lint=real", output)
+        self.assertIn("tools      : search=real, grep=real, list=real, read=real, lint=real", output)
 
     def test_planner_smoke_script_loads_world_state_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

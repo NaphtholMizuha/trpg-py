@@ -9,7 +9,7 @@ timeout = 120.0
 max_retries = 6
 interrupt_on = {}
 max_planning_rounds = 2
-tool_budget = 4
+tool_budget = 10
 
 [planner.prompt]
 directory = "prompts"
@@ -30,7 +30,7 @@ reranker = "BAAI/bge-reranker-v2-m3"
 
 [search.qdrant]
 url = "http://localhost:6333"
-collection_name = "dnd_5e_srd_hybrid"
+collection_name = "trpg_knowledge"
 dense_vector_name = "dense"
 sparse_vector_name = "sparse"
 

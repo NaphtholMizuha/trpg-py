@@ -9,6 +9,15 @@ from trpg_py.agent.tools.fetch_keys import (
     create_list_tool,
     create_fetch_keys_tool,
 )
+from trpg_py.agent.tools.grep import (
+    GrepError,
+    GrepInput,
+    GrepMatch,
+    GrepResult,
+    GrepTool,
+    create_grep_tool,
+    grep_leaf_paths,
+)
 from trpg_py.agent.tools.lint import (
     LintInput,
     LintIssue,
@@ -51,6 +60,11 @@ __all__ = [
     "FetchKeysInput",
     "FetchKeysResult",
     "FetchKeysTool",
+    "GrepError",
+    "GrepInput",
+    "GrepMatch",
+    "GrepResult",
+    "GrepTool",
     "LintInput",
     "LintIssue",
     "LintResult",
@@ -71,6 +85,7 @@ __all__ = [
     "SearchInput",
     "SearchResult",
     "SearchTool",
+    "create_grep_tool",
     "create_list_tool",
     "create_fetch_keys_tool",
     "create_lint_tool",
@@ -78,6 +93,7 @@ __all__ = [
     "create_reads_tool",
     "build_default_searcher",
     "create_search_tool",
+    "grep_leaf_paths",
     "lint_task_document",
     "read_paths",
 ]

@@ -170,6 +170,51 @@ class RepeatedNoMatchAgentFactory:
         return self.evidence_agent
 
 
+class GrepFallbackAgentFactory:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.evidence_agent: object | None = None
+        self.dsl_agent: object | None = None
+
+    def __call__(self, **kwargs: object) -> FakeAgent:
+        self.calls.append(kwargs)
+        tools = {tool.name: tool for tool in kwargs["tools"]}
+        if "list" not in tools:
+            self.dsl_agent = FakeAgent(
+                responses=[
+                    {
+                        "structured_response": {
+                            "status": "needs_human",
+                            "questions": [{"question": "Need target detail"}],
+                            "missing_info": ["target_id"],
+                        }
+                    }
+                ]
+            )
+            return self.dsl_agent
+
+        class _Agent:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+                self.grep_result: dict[str, object] | None = None
+                self.list_result: dict[str, object] | None = None
+
+            def invoke(self, payload: object, config: dict[str, object] | None = None) -> object:
+                self.calls.append({"input": payload, "config": config})
+                self.grep_result = tools["grep"].invoke({"terms": ["missing", "slot"]})
+                self.list_result = tools["list"].invoke({"prefix": "actors.aldera"})
+                return {
+                    "structured_response": {
+                        "status": "needs_human",
+                        "questions": [{"question": "Need target detail"}],
+                        "missing_info": ["target_id"],
+                    }
+                }
+
+        self.evidence_agent = _Agent()
+        return self.evidence_agent
+
+
 def make_evidence_ready_response(
     *,
     summary: str = "Collected enough evidence for the DSL stage.",
@@ -320,7 +365,7 @@ class PlannerTests(unittest.TestCase):
         self.assertIsInstance(captured_calls[1]["response_format"], ToolStrategy)
         self.assertEqual(["EvidenceAgentResult"], [spec.name for spec in captured_calls[0]["response_format"].schema_specs])
         self.assertEqual(["PlannerResult"], [spec.name for spec in captured_calls[1]["response_format"].schema_specs])
-        self.assertEqual(["search", "list", "read"], [tool.name for tool in captured_calls[0]["tools"]])
+        self.assertEqual(["search", "grep", "list", "read"], [tool.name for tool in captured_calls[0]["tools"]])
         self.assertEqual(["lint"], [tool.name for tool in captured_calls[1]["tools"]])
         self.assertEqual(2, len(captured_calls[0]["middleware"]))
         self.assertEqual(2, len(captured_calls[1]["middleware"]))
@@ -379,7 +424,7 @@ class PlannerTests(unittest.TestCase):
         self.assertIsInstance(agent_factory.calls[1]["response_format"], ToolStrategy)
         self.assertEqual(["EvidenceAgentResult"], [spec.name for spec in agent_factory.calls[0]["response_format"].schema_specs])
         self.assertEqual(["PlannerResult"], [spec.name for spec in agent_factory.calls[1]["response_format"].schema_specs])
-        self.assertEqual(["search", "list", "read"], [tool.name for tool in agent_factory.calls[0]["tools"]])
+        self.assertEqual(["search", "grep", "list", "read"], [tool.name for tool in agent_factory.calls[0]["tools"]])
         self.assertEqual(["lint"], [tool.name for tool in agent_factory.calls[1]["tools"]])
         self.assertEqual("openai:test-model", captured_config[0].model)
 
@@ -402,6 +447,7 @@ class PlannerTests(unittest.TestCase):
         planner = create_planner(
             config_path=str(DEFAULT_PROJECT_CONFIG_PATH),
             search_tool=DummyTool("search"),
+            grep_tool=DummyTool("grep"),
             list_tool=DummyTool("list"),
             read_tool=DummyTool("read"),
             lint_tool=DummyTool("lint"),
@@ -414,15 +460,20 @@ class PlannerTests(unittest.TestCase):
         system_prompt = agent_factory.calls[0]["system_prompt"]
         user_prompt = agent_factory.agent.calls[0]["input"]["messages"][0]["content"]
         self.assertIn("use lint to validate your candidate TaskDocument", system_prompt)
+        self.assertIn("Use `grep` when you know the fact you need", system_prompt)
+        self.assertIn("Use `list` only as a fallback navigation tool", system_prompt)
         self.assertIn("Use `read` when you know or can discover promising state paths", system_prompt)
         self.assertIn("Batch related value checks into one `read`", system_prompt)
         self.assertIn("For `list` and `read`, use bare store paths like actors.aldera.ac.", system_prompt)
-        self.assertIn("Treat `status=no_match` from `list` or `read` as evidence", system_prompt)
+        self.assertIn("Treat `status=no_match` from `grep`, `list`, or `read` as evidence", system_prompt)
         self.assertIn("you may try one suggestion-guided correction once", system_prompt)
         self.assertIn("Use lint only after you have drafted a candidate TaskDocument", system_prompt)
         self.assertIn("hard maximum tool budget", system_prompt)
         self.assertIn("Reserve state., context., and result. namespaces for TaskDocument $ref values only.", system_prompt)
         self.assertIn("TaskDocument minimal shape", user_prompt)
+        self.assertIn("grep searches canonical leaf store paths using keywords", user_prompt)
+        self.assertIn("Use grep to discover candidate leaf store paths from keywords", user_prompt)
+        self.assertIn("Use list only when grep cannot narrow the candidate structure enough", user_prompt)
         self.assertIn("Use read to confirm the current values", user_prompt)
         self.assertIn("batch them into a single read call", user_prompt)
         self.assertIn("Allowed type/kind pairs", user_prompt)
@@ -433,6 +484,7 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("list and read use bare store paths such as actors.goblin_1.ac", user_prompt)
         self.assertIn("Do not pass state.actors.goblin_1.ac directly to list or read.", user_prompt)
         self.assertIn("tool path actors.goblin_1.ac -> TaskDocument $ref state.actors.goblin_1.ac", user_prompt)
+        self.assertIn('grep terms: ["goblin", "scimitar", "to_hit"]', user_prompt)
         self.assertIn('read paths: ["actors.goblin_1.attacks.scimitar.to_hit", "actors.aldera.ac", "actors.goblin_1.ac"]', user_prompt)
         self.assertIn("Do not pass state.* references directly into `list` or `read`.", user_prompt)
         self.assertIn("convert a confirmed tool path like actors.aldera.ac into the $ref form state.actors.aldera.ac", user_prompt)
@@ -464,6 +516,7 @@ class PlannerTests(unittest.TestCase):
         planner = create_planner(
             config_path=str(DEFAULT_PROJECT_CONFIG_PATH),
             search_tool=DummyTool("search"),
+            grep_tool=DummyTool("grep"),
             list_tool=DummyTool("list"),
             read_tool=DummyTool("read"),
             lint_tool=DummyTool("lint"),
@@ -1184,6 +1237,30 @@ class PlannerTests(unittest.TestCase):
             log_text = Path(planner.last_run_log_path).read_text(encoding="utf-8")
         self.assertIn("tool_input tool=list prefix='actors'", log_text)
         self.assertIn('"planner_round": "evidence_agent"', log_text)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_plan_can_fallback_to_list_after_grep_no_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            agent_factory = GrepFallbackAgentFactory()
+            planner = create_planner(
+                config_path=str(config_path),
+                state={"actors": {"aldera": {"ac": 18, "id": "aldera"}}},
+                search_tool=DummyTool("search"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+            result = planner.plan({"instruction": "Inspect missing spell slots"})
+
+        self.assertEqual("needs_human", result.status)
+        self.assertEqual("no_match", agent_factory.evidence_agent.grep_result["status"])
+        self.assertEqual("ok", agent_factory.evidence_agent.list_result["status"])
+        self.assertIn("actors.aldera.ac", agent_factory.evidence_agent.list_result["items"])
 
     @patch.dict(
         os.environ,

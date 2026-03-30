@@ -33,7 +33,7 @@ DEFAULT_INSTRUCTION = "哥布林用弯刀攻击 aldera"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="使用真实 planner、真实 search 和真实 list/read 链路做一次烟雾测试"
+        description="使用真实 planner、真实 search/grep/list/read 链路做一次烟雾测试"
     )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="DM 指令文本")
     parser.add_argument(
@@ -221,7 +221,7 @@ def print_human_result(
     print("=" * 72)
     print(f"instruction: {instruction}")
     print(f"config     : {config_path}")
-    print("tools      : search=real, list=real, read=real, lint=real")
+    print("tools      : search=real, grep=real, list=real, read=real, lint=real")
     if thread_id:
         print(f"thread_id  : {thread_id}")
     if resumed:

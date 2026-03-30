@@ -33,11 +33,13 @@ from trpg_py.agent.planner_runtime_guards import (
 from trpg_py.agent.task_document import TASK_DOCUMENT_OUTPUT_SCHEMA, validate_candidate_task_document
 from trpg_py.agent.tools import (
     FetchKeysTool,
+    GrepTool,
     ListTool,
     LintTool,
     ReadTool,
     ReadsTool,
     SearchTool,
+    create_grep_tool,
     create_list_tool,
     create_fetch_keys_tool,
     create_lint_tool,
@@ -220,6 +222,7 @@ class Planner:
         config: PlannerFactoryConfig,
         project_root: Path,
         search_tool: SearchTool,
+        grep_tool: GrepTool,
         list_tool: ListTool | FetchKeysTool,
         read_tool: ReadTool | ReadsTool,
         lint_tool: LintTool,
@@ -231,6 +234,7 @@ class Planner:
         self.config = config
         self.project_root = project_root
         self.search_tool = search_tool
+        self.grep_tool = grep_tool
         self.list_tool = list_tool
         self.read_tool = read_tool
         self.fetch_keys_tool = list_tool
@@ -1414,6 +1418,8 @@ class Planner:
             "Your job in this stage is to gather evidence only.",
             "Do not draft or repair a TaskDocument in this stage.",
             "Use only search, list, and read to collect enough information for the DSL stage.",
+            "Prefer grep when you know the facts you need but not the canonical store prefix.",
+            "Use list only as a fallback navigation tool when grep cannot narrow the candidate structure enough.",
             "Return status ready with an evidence_bundle when the evidence is sufficient for dsl_agent.",
             "Return status needs_human with concrete questions when more human input is required.",
             "Return status blocked only for genuine system failures.",
@@ -1448,7 +1454,7 @@ class Planner:
         parts = [
             "Stage: dsl_agent.",
             "Your job in this stage is to draft or repair a TaskDocument from the provided EvidenceBundle.",
-            "Do not use search, list, or read in this stage.",
+            "Do not use search, grep, list, or read in this stage.",
             "Use lint to validate and iteratively improve the candidate TaskDocument.",
             "Only return status blocked for genuine system failures, not merely because earlier evidence gathering was hard.",
             "",
@@ -1513,6 +1519,7 @@ def create_planner(
     project_config: ProjectConfig | None = None,
     config_path: str | None = None,
     search_tool: SearchTool | None = None,
+    grep_tool: GrepTool | None = None,
     list_tool: ListTool | None = None,
     fetch_keys_tool: FetchKeysTool | None = None,
     read_tool: ReadTool | None = None,
@@ -1561,6 +1568,7 @@ def create_planner(
     if search_tool is None and resolved_project_config is None:
         raise ValueError("project_config or config_path is required when search_tool is not provided")
     search = search_tool or create_search_tool(project_config=resolved_project_config, config_path=config_path)
+    grep = grep_tool or create_grep_tool(state=state, state_provider=state_provider)
     resolved_list_tool = list_tool or fetch_keys_tool or create_list_tool(state=state, state_provider=state_provider)
     resolved_read_tool = read_tool or reads_tool or create_read_tool(state=state, state_provider=state_provider)
     lint = lint_tool or create_lint_tool()
@@ -1570,7 +1578,7 @@ def create_planner(
     resolved_checkpointer = _resolve_checkpointer(config, checkpointer)
     evidence_agent = resolved_agent_factory(
         model=resolved_model,
-        tools=[search, resolved_list_tool, resolved_read_tool],
+        tools=[search, grep, resolved_list_tool, resolved_read_tool],
         system_prompt=_build_system_prompt(config),
         response_format=ToolStrategy(EvidenceAgentResult),
         tool_budget=config.tool_budget,
@@ -1604,6 +1612,7 @@ def create_planner(
         config=config,
         project_root=project_root,
         search_tool=search,
+        grep_tool=grep,
         list_tool=resolved_list_tool,
         read_tool=resolved_read_tool,
         lint_tool=lint,
