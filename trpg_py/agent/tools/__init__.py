@@ -51,6 +51,7 @@ from trpg_py.agent.tools.search import (
     build_default_searcher,
     create_search_tool,
 )
+from trpg_py.rag import Retriever, RetrievedDocument, build_default_retriever
 
 __all__ = [
     "ListError",
@@ -82,6 +83,8 @@ __all__ = [
     "HTTPReranker",
     "HybridRuleSearcher",
     "OpenAIEmbedder",
+    "Retriever",
+    "RetrievedDocument",
     "SearchInput",
     "SearchResult",
     "SearchTool",
@@ -94,6 +97,7 @@ __all__ = [
     "build_default_searcher",
     "create_search_tool",
     "grep_leaf_paths",
+    "build_default_retriever",
     "lint_task_document",
     "read_paths",
 ]

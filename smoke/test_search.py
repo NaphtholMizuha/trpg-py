@@ -121,13 +121,17 @@ def print_human_readable(query: str, result: dict[str, Any], *, show_parent: boo
             f"title={metadata.get('title', '(untitled)')}"
         )
         if metadata:
-            summary = ", ".join(
-                f"{key}={value}"
-                for key, value in metadata.items()
-                if key in {"file", "section", "locator", "type", "point_id", "title"}
-            )
-            if summary:
-                print(f"meta : {summary}")
+            meta_parts: list[str] = []
+            for key in ("doc_type", "book", "path", "point_id"):
+                if key in metadata:
+                    meta_parts.append(f"{key}={metadata[key]}")
+            if meta_parts:
+                print(f"meta : {', '.join(meta_parts)}")
+            section_titles = metadata.get("section_titles")
+            if isinstance(section_titles, list) and section_titles:
+                rendered_sections = " > ".join(str(item) for item in section_titles if item)
+                if rendered_sections:
+                    print(f"sections: {rendered_sections}")
         print("text :")
         print(indent_block(truncate(hit.get("text", ""), 1200)))
         if show_parent and hit.get("parent_text"):
