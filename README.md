@@ -13,25 +13,25 @@
 **运行单个案例：**
 
 ```bash
-python -B smoke/test_engine.py fireball
+python -B src/smoke/test_engine.py fireball
 ```
 
 **批量运行所有 demo：**
 
 ```bash
-python -B smoke/test_engine.py all
+python -B src/smoke/test_engine.py all
 ```
 
 **查看原始结构化结果（而非人类可读摘要）：**
 
 ```bash
-python -B smoke/test_engine.py fireball --json
+python -B src/smoke/test_engine.py fireball --json
 ```
 
 **运行完整测试：**
 
 ```bash
-python -B -m unittest discover -s tests -v
+python -B -m unittest discover -s src/tests -t src -v
 ```
 
 ## 架构概览
@@ -40,8 +40,8 @@ python -B -m unittest discover -s tests -v
 
 | 层级 | 职责 | 使用场景 |
 |------|------|----------|
-| 引擎核心 `trpg_py.execute_task()` | 读取任务文档、校验结构、逐步执行、写回状态、生成执行报告 | 正式程序调用 |
-| Smoke 入口 `smoke/test_engine.py` | 快速运行内置案例、查看输出效果 | 演示和调试 |
+| 引擎核心 `augury.execute_task()` | 读取任务文档、校验结构、逐步执行、写回状态、生成执行报告 | 正式程序调用 |
+| Smoke 入口 `src/smoke/test_engine.py` | 快速运行内置案例、查看输出效果 | 演示和调试 |
 
 如果你在自己的代码中接入这套引擎，直接调用 Python API 即可。
 
@@ -49,16 +49,16 @@ python -B -m unittest discover -s tests -v
 
 仓库现在还包含两类面向 planner agent 的工具入口：
 
-- `trpg_py.agent.tools.search`：规则检索
-- `trpg_py.agent.tools.fetch_keys`：状态路径发现
-- `trpg_py.agent.tools.reads`：状态值读取
-- `trpg_py.agent.tools.lint`：候选 `TaskDocument` 只读校验
+- `augury.agent.tools.search`：规则检索
+- `augury.agent.tools.fetch_keys`：状态路径发现
+- `augury.agent.tools.reads`：状态值读取
+- `augury.agent.tools.lint`：候选 `TaskDocument` 只读校验
 
 这四类工具在每次调用时都会通过 `loguru` 自动记录输入和输出摘要，方便排查 planner 或其他 agent 的工具使用情况。
 
 现在还提供一个基于 LangChain `create_agent()` 的 planner 入口：
 
-- `trpg_py.agent.create_planner`：把 DM 指令规划成 `TaskDocument`，或在信息不足时返回结构化澄清问题
+- `augury.agent.create_planner`：把 DM 指令规划成 `TaskDocument`，或在信息不足时返回结构化澄清问题
 
 ### 统一配置
 
@@ -67,12 +67,12 @@ python -B -m unittest discover -s tests -v
 - `planner` 的模型、接入点、超时、重试、规划轮数和工具预算都从这里读取
 - `search` 的 API、Qdrant 和检索默认参数也从这里读取
 - `planner.api_key_env` 和 `search.api.api_key_env` 只声明环境变量名，真实密钥必须通过环境变量提供
-- 统一配置的强制治理范围只覆盖 `trpg_py` 包内长期运行配置
-- `smoke/` 下的手动脚本可以保留自己的局部默认值或 CLI 参数
+- 统一配置的强制治理范围只覆盖 `augury` 包内长期运行配置
+- `src/smoke/` 下的手动脚本可以保留自己的局部默认值或 CLI 参数
 - 常规包内运行路径不再依赖独立环境变量
 
 如果你需要为测试或嵌入场景覆写默认行为，可以显式传 `config_path`、`project_config` 或具体构造参数。
-后续如果要新增项目级默认配置，也必须先扩展 `trpg_py.config` 与 `config/config.toml`，不要再新增独立 `DEFAULT_*` 或第二份配置文件。
+后续如果要新增项目级默认配置，也必须先扩展 `augury.config` 与 `config/config.toml`，不要再新增独立 `DEFAULT_*` 或第二份配置文件。
 
 例如，当前默认配置依赖这些环境变量：
 
@@ -91,7 +91,7 @@ export SEARCH_API_KEY="your-search-key"
 一个最小示例：
 
 ```python
-from trpg_py.agent.tools import build_default_searcher, create_search_tool
+from augury.agent.tools import build_default_searcher, create_search_tool
 
 searcher = build_default_searcher()
 tool = create_search_tool(searcher=searcher)
@@ -109,7 +109,7 @@ print(result)
 一个最小示例：
 
 ```python
-from trpg_py.agent.tools import create_fetch_keys_tool
+from augury.agent.tools import create_fetch_keys_tool
 
 state = {"actors": {"goblin_1": {"hp": {"current": 7}}, "hero_1": {"ac": 16}}}
 tool = create_fetch_keys_tool(state=state)
@@ -125,19 +125,19 @@ print(goblin_paths)
 如果你想直接观察工具行为，也可以运行：
 
 ```bash
-python smoke/test_fetch_keys.py
+python src/smoke/test_fetch_keys.py
 ```
 
 你也可以直接运行另外两个 smoke 脚本观察效果：
 
 ```bash
-python smoke/test_linter.py --json
-python smoke/test_reads.py --json
-python smoke/test_search.py --json "fireball spell"
-python smoke/test_planner.py --instruction "张三用长剑攻击地精" --json
+python src/smoke/test_linter.py --json
+python src/smoke/test_reads.py --json
+python src/smoke/test_search.py --json "fireball spell"
+python src/smoke/test_planner.py --instruction "张三用长剑攻击地精" --json
 ```
 
-`smoke/test_planner.py` 默认的人类可读输出现在会直接展示 `task_document_validation` 这类内部校验失败的具体原因；如果你还想看轮次轨迹、修复反馈和更完整的调试信息，再追加 `--debug`。
+`src/smoke/test_planner.py` 默认的人类可读输出现在会直接展示 `task_document_validation` 这类内部校验失败的具体原因；如果你还想看轮次轨迹、修复反馈和更完整的调试信息，再追加 `--debug`。
 
 planner 现在还会为每次真实运行自动写入一份详细日志到项目内 `logs/planner/<date>/` 目录。遇到 `blocked` 或其他难以解释的 planner 故障时，优先查看 smoke 输出里提示的 `log_path`，再去对应日志文件中看 run 元数据、轮次边界、修复反馈和结构化输出异常细节。
 
@@ -156,7 +156,7 @@ planner smoke 默认 world state 也不再是脚本内联的小字典，而是�
 一个最小示例：
 
 ```python
-from trpg_py.agent import create_planner
+from augury.agent import create_planner
 
 state = {
     "actors": {
@@ -176,7 +176,7 @@ print(result.questions)
 如果你需要自定义模型接入点，请通过 planner factory 统一注入：
 
 ```python
-from trpg_py.agent import create_planner
+from augury.agent import create_planner
 
 planner = create_planner(
     model="openai:gpt-5.4",
@@ -190,7 +190,7 @@ planner = create_planner(
 
 默认情况下，planner factory 会先读取 `config/config.toml`，再用你显式传入的参数做覆写。若启用了 `interrupt_on`，factory 会为基于 `create_agent()` 的 planner 自动准备内存 checkpointer，并把对应工具接入 HITL middleware。
 
-planner 的默认 prompt 也通过统一配置管理。你可以直接编辑 `config/prompts/planner_system.txt` 和 `config/prompts/planner_user.txt`，并在 `config/config.toml` 的 `[planner.prompt]` 段切换目录或模板文件，而不必再修改 `trpg_py/agent/planner.py`。
+planner 的默认 prompt 也通过统一配置管理。你可以直接编辑 `config/prompts/planner_system.txt` 和 `config/prompts/planner_user.txt`，并在 `config/config.toml` 的 `[planner.prompt]` 段切换目录或模板文件，而不必再修改 `src/augury/agent/planner.py`。
 
 当前默认 prompt 已经内置 `TaskDocument` 的最小骨架、合法 `type/kind` 组合、引用约定和 canonical example；如果你在调 planner DSL 产出，优先改这里，而不是继续把结构说明写回代码里。
 
@@ -211,15 +211,15 @@ resumed = planner.plan(
 顶层导入只保留少量稳定入口，例如：
 
 ```python
-from trpg_py import FixedDiceRoller, execute_task
+from augury import FixedDiceRoller, execute_task
 ```
 
-如果你需要内部实现细节，请直接使用归属包路径，例如 `trpg_py.engine.core.refs`、`trpg_py.engine.combat.operations` 或 `trpg_py.store`。`trpg_py.dice`、`trpg_py.executor`、`trpg_py.operations`、`trpg_py.refs`、`trpg_py.models`、`trpg_py.state` 这些旧根目录模块不再保留。
+如果你需要内部实现细节，请直接使用归属包路径，例如 `augury.engine.core.refs`、`augury.engine.combat.operations` 或 `augury.store`。`augury.dice`、`augury.executor`、`augury.operations`、`augury.refs`、`augury.models`、`augury.state` 这些旧根目录模块不再保留。
 
 ## 最小可运行示例
 
 ```python
-from trpg_py import FixedDiceRoller, execute_task
+from augury import FixedDiceRoller, execute_task
 
 document = {
     "task_id": "simple_attack",
@@ -540,23 +540,23 @@ select.target / select.area
 | `burning_hands_cone` | 燃烧之手（锥形范围） |
 | `custom_layout_fireburst` | 自定义状态结构示例 |
 
-`smoke/test_engine.py all` 会按稳定顺序运行所有 demo 并输出汇总。
+`src/smoke/test_engine.py all` 会按稳定顺序运行所有 demo 并输出汇总。
 
 ## 代码入口
 
 | 文件 | 职责 |
 |------|------|
-| `trpg_py/executor.py` | 任务校验、顺序执行、条件跳过、执行报告 |
-| `trpg_py/operations.py` | 核心规则语义 |
-| `trpg_py/state.py` | 点分路径读写 |
-| `smoke/test_engine.py` | Demo 注册、单案例/批量运行、摘要输出 |
+| `src/augury/engine/core/executor.py` | 任务校验、顺序执行、条件跳过、执行报告 |
+| `src/augury/engine/combat/operations.py` | 核心规则语义 |
+| `src/augury/store/core.py` | 点分路径读写 |
+| `src/smoke/test_engine.py` | Demo 注册、单案例/批量运行、摘要输出 |
 
 ## 测试覆盖
 
 运行全部测试：
 
 ```bash
-python -B -m unittest discover -s tests -v
+python -B -m unittest discover -s src/tests -t src -v
 ```
 
 当前测试重点：
@@ -568,4 +568,4 @@ python -B -m unittest discover -s tests -v
 - `sphere` / `line` / `cone` / `target` 范围选择
 - 治疗封顶
 - 资源不足失败
-- `smoke/test_engine.py` 的人类可读输出与批量运行模式
+- `src/smoke/test_engine.py` 的人类可读输出与批量运行模式
