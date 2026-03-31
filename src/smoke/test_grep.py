@@ -6,8 +6,8 @@ grep 工具演示脚本
 使用方式:
   python src/smoke/test_grep.py
   python src/smoke/test_grep.py --json
-  python src/smoke/test_grep.py --query "goblin scimitar to_hit"
-  python src/smoke/test_grep.py --term goblin --term scimitar --term to_hit
+  python src/smoke/test_grep.py --expression "goblin && scimitar && to_hit"
+  python src/smoke/test_grep.py --expression "(aldera && ac) || (malik && slot)"
   python src/smoke/test_grep.py --state-file ./config/world_state.toml
 """
 
@@ -27,25 +27,23 @@ from augury.agent.tools import create_grep_tool
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "config" / "world_state.toml"
-DEFAULT_QUERY = "goblin scimitar to_hit"
-DEFAULT_TERMS = ["aldera", "ac"]
-DEFAULT_NO_MATCH_TERMS = ["xyzzy", "plugh", "nonexistent_leaf"]
+DEFAULT_EXPRESSIONS = ["goblin && scimitar && to_hit", "(aldera && ac) || (malik && slot)"]
+DEFAULT_NO_MATCH_EXPRESSIONS = ["xyzzy && plugh"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="演示 grep 工具的叶子路径检索能力")
+    parser = argparse.ArgumentParser(description="演示 grep 工具的布尔表达式状态行匹配能力")
     parser.add_argument(
         "--state-file",
         default=str(DEFAULT_STATE_FILE),
         help="状态 TOML 文件路径，默认使用 config/world_state.toml",
     )
-    parser.add_argument("--query", default=DEFAULT_QUERY, help="可选自由文本查询")
     parser.add_argument(
-        "--term",
+        "--expression",
         action="append",
-        dest="terms",
+        dest="expressions",
         default=None,
-        help="可选关键词；可重复传入。未提供时使用默认演示关键词。",
+        help="布尔表达式；可重复传入。未提供时使用默认演示表达式。",
     )
     parser.add_argument("--json", action="store_true", help="仅输出 JSON 结果")
     return parser
@@ -58,18 +56,16 @@ def load_state(path: str | Path) -> dict[str, Any]:
 def main() -> int:
     args = build_parser().parse_args()
     state_path = Path(args.state_file).expanduser().resolve()
-    terms = list(args.terms or DEFAULT_TERMS)
+    expressions = list(args.expressions or DEFAULT_EXPRESSIONS)
 
     state = load_state(state_path)
     tool = create_grep_tool(state=state)
-    result_query = tool.invoke({"query": args.query})
-    result_terms = tool.invoke({"terms": terms})
-    result_no_match = tool.invoke({"terms": DEFAULT_NO_MATCH_TERMS})
+    result_match = tool.invoke({"expressions": expressions})
+    result_no_match = tool.invoke({"expressions": DEFAULT_NO_MATCH_EXPRESSIONS})
 
     if args.json:
         payload = {
-            "query": result_query,
-            "terms": result_terms,
+            "match": result_match,
             "no_match": result_no_match,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -79,13 +75,10 @@ def main() -> int:
     print("TRPG Agent Grep Smoke Test")
     print("=" * 72)
     print(f"state_file : {state_path}")
-    print(f"query demo : {args.query}")
-    print_human_result(result_query)
+    print(f"match demo : {expressions}")
+    print_human_result(result_match)
     print("-" * 72)
-    print(f"terms demo : {terms}")
-    print_human_result(result_terms)
-    print("-" * 72)
-    print(f"no_match demo: {DEFAULT_NO_MATCH_TERMS}")
+    print(f"no_match demo: {DEFAULT_NO_MATCH_EXPRESSIONS}")
     print_human_result(result_no_match)
     return 0
 
@@ -102,12 +95,8 @@ def print_human_result(result: dict[str, Any]) -> None:
         print("matches    : (none)")
         return
     print(f"matches    : {len(matches)}")
-    for item in matches:
-        print(f"- {item.get('path', '')} (score={item.get('score', 0)})")
-        if item.get("matched_terms"):
-            print(f"  terms     : {', '.join(str(term) for term in item['matched_terms'])}")
-        if item.get("reason"):
-            print(f"  reason    : {item['reason']}")
+    for item in matches[:5]:
+        print(f"- {item}")
 
 
 if __name__ == "__main__":
