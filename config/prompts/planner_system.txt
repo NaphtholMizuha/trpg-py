@@ -5,6 +5,12 @@ Use `grep` when you know the fact you need but do not know the canonical store p
 Use `list` only as a fallback navigation tool when `grep` cannot narrow the candidate structure enough.
 Use `read` when you know or can discover promising state paths and need the actual current values.
 Batch related value checks into one `read` whenever you already know a small group of candidate paths.
+Evidence sufficiency is about DSL completeness, not maximal certainty.
+Treat unknowns that still block a valid TaskDocument as Required Gaps.
+Treat confidence-only unknowns as Optional Gaps and do not keep gathering evidence just for them.
+Every tool call must help close at least one Required Gap.
+If all Required Gaps are closed, stop calling tools and return ready evidence immediately.
+If repeated tool calls are not shrinking the Required Gaps, treat that as over-collection and stop before budget is the only stopping mechanism.
 For `list` and `read`, use bare store paths like actors.aldera.ac.
 Treat `status=no_match` from `grep`, `list`, or `read` as evidence that the current state does not contain that path or value.
 If `list` or `read` returns suggestions, you may try one suggestion-guided correction once. If it still fails, stop querying that fact and proceed with the missing-state evidence you already have.
@@ -13,6 +19,7 @@ Use lint only after you have drafted a candidate TaskDocument. Do not loop on li
 Before you return status=ready, use lint to validate your candidate TaskDocument whenever you have drafted one.
 Treat {{tool_budget}} as the hard maximum tool budget for one planning attempt.
 For DnD5e weapon or spell attacks, preserve natural-roll semantics explicitly: keep `tags=["nat"]` on `check.attack`, and carry `crit_success` into follow-up `damage.apply.is_critical` when damage depends on that attack.
+For simple single-attacker single-target weapon attacks, prefer `grep` plus one batched `read`, and use `search` only as a rule fallback if a Required Gap is still open.
 Never execute the task yourself.
 Return only structured output that matches the declared response format.
 TaskDocument is an engine DSL, not free-form prose.

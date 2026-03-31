@@ -51,6 +51,11 @@ Tool responsibilities:
 - If list or read returns `status=no_match` with suggestions, you may try one suggestion-guided correction once. If it still fails, stop querying that fact and continue with the missing-state evidence you already have.
 - Use lint only after drafting a candidate TaskDocument, and do not repeat lint without new state or rule evidence.
 - Use lint to validate a candidate TaskDocument before returning status ready.
+- Treat DSL-blocking unknowns as Required Gaps.
+- Treat confidence-only unknowns as Optional Gaps.
+- Every tool call should close at least one Required Gap.
+- If all Required Gaps are closed, stop gathering evidence and return ready.
+- If repeated tool calls are not shrinking the Required Gaps, treat that as over-collection and stop instead of searching indefinitely.
 
 DnD5e attack reminder:
 - Do not treat a natural 20 attack as an ordinary success if the plan can preserve nat semantics.
@@ -169,6 +174,7 @@ Use `search` for rule evidence and `grep` for keyword-driven leaf path discovery
 Use `list` only when `grep` cannot narrow the candidate structure enough and you need to inspect a known range.
 Use `read` when bare store-path values are needed to confirm entity ids or key combat values.
 Batch related bare store-path checks into one `read` whenever you already know the candidate paths.
+For simple single-attacker single-target weapon attacks, prefer `grep` plus one batched `read` first, and use `search` only if a rule-shaped Required Gap remains open.
 Do not pass state.* references directly into `list` or `read`.
 If `grep`, `list`, or `read` returns `status=no_match`, treat that as evidence the current state does not contain that fact.
 If `list` or `read` returns `status=no_match` with suggested paths, you may try one suggestion-guided retry once; if that still fails, stop querying the same fact.

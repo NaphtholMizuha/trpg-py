@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class PlannerGuardEvent(BaseModel):
-    kind: Literal["repeated_no_match", "tool_budget_exhausted"]
+    kind: Literal["repeated_no_match", "repeated_theme", "tool_budget_exhausted"]
     tool: str
     theme: str | None = None
     detail: str
@@ -20,7 +20,65 @@ class PlannerGuardEvent(BaseModel):
 class PlannerRuntimeGuard:
     list_no_match_suggestions: dict[str, list[str]] = field(default_factory=dict)
     read_no_match_suggestions: dict[str, list[str]] = field(default_factory=dict)
+    grep_theme_results: dict[str, dict[str, object]] = field(default_factory=dict)
+    search_theme_results: dict[str, dict[str, object]] = field(default_factory=dict)
     events: list[PlannerGuardEvent] = field(default_factory=list)
+
+    def short_circuit_grep(self, *, tool_name: str, theme: str | None) -> dict[str, object] | None:
+        normalized_theme = _normalize_theme(theme)
+        if normalized_theme == "*":
+            return None
+        cached = self.grep_theme_results.get(normalized_theme)
+        if cached is None:
+            return None
+        self.events.append(
+            PlannerGuardEvent(
+                kind="repeated_theme",
+                tool=tool_name,
+                theme=normalized_theme,
+                detail=(
+                    f"{tool_name} already returned a result for theme {normalized_theme!r}. "
+                    "Reuse that result instead of querying the same theme again in this evidence run."
+                ),
+            )
+        )
+        return cached
+
+    def record_grep_result(self, *, theme: str | None, result: dict[str, object]) -> None:
+        normalized_theme = _normalize_theme(theme)
+        if normalized_theme == "*":
+            return
+        if result.get("status") not in {"ok", "no_match"}:
+            return
+        self.grep_theme_results[normalized_theme] = result
+
+    def short_circuit_search(self, *, tool_name: str, theme: str | None) -> dict[str, object] | None:
+        normalized_theme = _normalize_theme(theme)
+        if normalized_theme == "*":
+            return None
+        cached = self.search_theme_results.get(normalized_theme)
+        if cached is None:
+            return None
+        self.events.append(
+            PlannerGuardEvent(
+                kind="repeated_theme",
+                tool=tool_name,
+                theme=normalized_theme,
+                detail=(
+                    f"{tool_name} already returned a result for theme {normalized_theme!r}. "
+                    "Reuse that result instead of repeating the same rule lookup in this evidence run."
+                ),
+            )
+        )
+        return cached
+
+    def record_search_result(self, *, theme: str | None, result: dict[str, object]) -> None:
+        normalized_theme = _normalize_theme(theme)
+        if normalized_theme == "*":
+            return
+        if result.get("status") not in {"ok", "no_match"}:
+            return
+        self.search_theme_results[normalized_theme] = result
 
     def short_circuit_list(self, *, tool_name: str, prefix: str | None) -> dict[str, object] | None:
         theme = _normalize_prefix(prefix)
@@ -158,6 +216,11 @@ def build_guard_missing_info(guard: PlannerRuntimeGuard | None) -> list[str]:
 
 def _normalize_prefix(prefix: str | None) -> str:
     normalized = (prefix or "").strip()
+    return normalized if normalized else "*"
+
+
+def _normalize_theme(theme: str | None) -> str:
+    normalized = " ".join((theme or "").strip().split())
     return normalized if normalized else "*"
 
 

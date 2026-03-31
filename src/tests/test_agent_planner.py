@@ -661,6 +661,161 @@ class PlannerTests(unittest.TestCase):
         {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
         clear=False,
     )
+    def test_evidence_prompt_includes_sufficiency_guidance_and_few_shot_for_simple_attack(self) -> None:
+        valid_document = {
+            "task_id": "goblin_scimitar_attack",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "attack_roll",
+                    "type": "check",
+                    "kind": "attack",
+                    "args": {"dice": "1d20", "modifier": 4, "target_id": "hero_1", "target_ac": 16},
+                }
+            ],
+        }
+        agent_factory = SequencedAgentFactory(
+            {"responses": [make_evidence_ready_response()]},
+            {
+                "responses": [
+                    {
+                        "structured_response": {
+                            "status": "ready",
+                            "task_document": valid_document,
+                        }
+                    }
+                ]
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+            result = planner.plan({"instruction": "Goblin attacks hero_1"})
+
+        self.assertEqual("ready", result.status)
+        prompt = agent_factory.agents[0].calls[0]["input"]["messages"][0]["content"]
+        self.assertIn("Evidence sufficiency is about DSL completeness, not maximal certainty.", prompt)
+        self.assertIn("Required Gaps are the unknowns that still block a valid TaskDocument.", prompt)
+        self.assertIn("Current evidence stop plan:", prompt)
+        self.assertIn('"action_shape": "simple_single_target_weapon_attack"', prompt)
+        self.assertIn("Few-shot sufficiency examples:", prompt)
+        self.assertIn('Instruction: "Goblin uses a scimitar to attack aldera."', prompt)
+        self.assertIn("Return status ready with ready_for_dsl=true.", prompt)
+        self.assertIn("Treat repeated tool calls that do not shrink Required Gaps as over-collection", prompt)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_evidence_prompt_uses_generic_stop_plan_for_spell_like_instruction(self) -> None:
+        valid_document = {
+            "task_id": "fireball_attack",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "attack_roll",
+                    "type": "check",
+                    "kind": "attack",
+                    "args": {"dice": "1d20", "modifier": 4, "target_id": "hero_1", "target_ac": 16},
+                }
+            ],
+        }
+        agent_factory = SequencedAgentFactory(
+            {"responses": [make_evidence_ready_response()]},
+            {
+                "responses": [
+                    {
+                        "structured_response": {
+                            "status": "ready",
+                            "task_document": valid_document,
+                        }
+                    }
+                ]
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+            result = planner.plan({"instruction": "Wizard casts fireball at hero_1"})
+
+        self.assertEqual("ready", result.status)
+        prompt = agent_factory.agents[0].calls[0]["input"]["messages"][0]["content"]
+        self.assertIn('"action_shape": "generic_action"', prompt)
+        self.assertNotIn('"action_shape": "simple_single_target_weapon_attack"', prompt)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
+    def test_plan_normalizes_ready_evidence_bundle_to_ready_for_dsl_when_missing_info_is_empty(self) -> None:
+        valid_document = {
+            "task_id": "goblin_scimitar_attack",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "attack_roll",
+                    "type": "check",
+                    "kind": "attack",
+                    "args": {"dice": "1d20", "modifier": 4, "target_id": "hero_1", "target_ac": 16},
+                }
+            ],
+        }
+        agent_factory = SequencedAgentFactory(
+            {"responses": [make_evidence_ready_response(ready_for_dsl=False)]},
+            {
+                "responses": [
+                    {
+                        "structured_response": {
+                            "status": "ready",
+                            "task_document": valid_document,
+                        }
+                    }
+                ]
+            },
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(Path(temp_dir) / "config.toml")
+            planner = create_planner(
+                config_path=str(config_path),
+                search_tool=DummyTool("search"),
+                fetch_keys_tool=DummyTool("fetch_keys"),
+                model_builder=lambda config: "fake-model",
+                agent_factory=agent_factory,
+            )
+
+            result = planner.plan({"instruction": "Goblin attacks hero_1"})
+
+        self.assertEqual("ready", result.status)
+        dsl_prompt = agent_factory.agents[1].calls[0]["input"]["messages"][0]["content"]
+        self.assertIn('"ready_for_dsl": true', dsl_prompt)
+
+    @patch.dict(
+        os.environ,
+        {"PLANNER_API_KEY": "planner-key", "SEARCH_API_KEY": "search-key"},
+        clear=False,
+    )
     def test_plan_includes_debug_attempts_when_requested(self) -> None:
         valid_document = {
             "task_id": "goblin_scimitar_attack",

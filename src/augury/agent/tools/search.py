@@ -6,6 +6,7 @@ from langchain_core.tools import BaseTool
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from augury.agent.planner_runtime_guards import get_active_planner_runtime_guard
 from augury.config import ProjectConfig
 from augury.rag.retriever import (
     FastEmbedSparseEmbedder,
@@ -124,6 +125,17 @@ def run_search(
     result_limit = limit or retriever.default_limit
     candidate_limit = max(fetch_k or retriever.default_fetch_k, result_limit)
     _log_search_input(query=normalized_query, limit=result_limit, fetch_k=candidate_limit)
+    guard = get_active_planner_runtime_guard()
+    if guard is not None:
+        guarded_result = guard.short_circuit_search(tool_name="search", theme=normalized_query)
+        if guarded_result is not None:
+            logger.warning(
+                "tool_guard tool=search kind=repeated_theme theme={!r}",
+                normalized_query,
+            )
+            validated = SearchResult.model_validate(guarded_result)
+            _log_search_output(validated)
+            return validated
     if not normalized_query:
         result = SearchResult(
             status="error",
@@ -141,6 +153,8 @@ def run_search(
         if not documents:
             result = SearchResult(status="no_match")
             _log_search_output(result)
+            if guard is not None:
+                guard.record_search_result(theme=normalized_query, result=result.model_dump(exclude_none=True))
             return result
         result = SearchResult(
             status="ok",
@@ -150,6 +164,8 @@ def run_search(
             ],
         )
         _log_search_output(result)
+        if guard is not None:
+            guard.record_search_result(theme=normalized_query, result=result.model_dump(exclude_none=True))
         return result
     except Exception as exc:
         result = SearchResult(

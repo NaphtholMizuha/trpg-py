@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from loguru import logger
 
+from augury.agent.planner_runtime_guards import activate_planner_runtime_guard
 from tests.config_helpers import write_project_config
 from augury.agent.tools import HybridRuleSearcher, SearchResult, build_default_searcher, create_search_tool
 from augury.config import clear_project_config_cache
@@ -246,6 +247,23 @@ class HybridRuleSearcherTests(unittest.TestCase):
         self.assertIsNone(result.error)
         logs = self.log_output.getvalue()
         self.assertIn("tool_output tool=search status=no_match hits=0", logs)
+
+    def test_search_short_circuits_repeated_query_with_runtime_guard(self) -> None:
+        searcher = HybridRuleSearcher(
+            collection_name="trpg_knowledge",
+            qdrant_client=FakeQdrantClient(points=[]),
+            dense_embedder=self.dense,
+            sparse_embedder=self.sparse,
+            reranker=FakeReranker(results=[]),
+        )
+
+        with activate_planner_runtime_guard():
+            first = searcher.search("shield")
+            second = searcher.search("shield")
+
+        self.assertEqual(first, second)
+        logs = self.log_output.getvalue()
+        self.assertIn("tool_guard tool=search kind=repeated_theme", logs)
 
     def test_search_returns_error_when_qdrant_fails(self) -> None:
         searcher = HybridRuleSearcher(

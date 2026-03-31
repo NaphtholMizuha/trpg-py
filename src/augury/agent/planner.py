@@ -83,6 +83,14 @@ class EvidenceBundle(BaseModel):
     ready_for_dsl: bool = False
 
 
+class EvidenceStopPlan(BaseModel):
+    action_shape: str = Field(min_length=1)
+    required_gaps: list[str] = Field(default_factory=list)
+    optional_gaps: list[str] = Field(default_factory=list)
+    search_policy: str = Field(min_length=1)
+    stop_rule: str = Field(min_length=1)
+
+
 class EvidenceAgentResult(BaseModel):
     status: Literal["ready", "needs_human", "blocked"]
     evidence_bundle: EvidenceBundle | None = None
@@ -776,12 +784,7 @@ class Planner:
                         ),
                     )
 
-                evidence_result.evidence_bundle.assumptions = list(
-                    dict.fromkeys(
-                        [*evidence_result.evidence_bundle.assumptions, *evidence_result.assumptions]
-                    )
-                )
-                return evidence_result.evidence_bundle
+                return self._finalize_evidence_bundle(evidence_result)
 
     def _run_dsl_stage(
         self,
@@ -1413,16 +1416,24 @@ class Planner:
         resume_payload: Any,
     ) -> str:
         base_prompt = self._build_user_prompt(request, validation_feedback="")
+        stop_plan = self._build_evidence_stop_plan(request)
         parts = [
             "Stage: evidence_agent.",
             "Your job in this stage is to gather evidence only.",
             "Do not draft or repair a TaskDocument in this stage.",
-            "Use only search, list, and read to collect enough information for the DSL stage.",
+            "Use only search, grep, list, and read to collect enough information for the DSL stage.",
             "Prefer grep when you know the facts you need but not the canonical store prefix.",
             "Use list only as a fallback navigation tool when grep cannot narrow the candidate structure enough.",
             "Return status ready with an evidence_bundle when the evidence is sufficient for dsl_agent.",
             "Return status needs_human with concrete questions when more human input is required.",
             "Return status blocked only for genuine system failures.",
+            "Evidence sufficiency is about DSL completeness, not maximal certainty.",
+            "Required Gaps are the unknowns that still block a valid TaskDocument.",
+            "Optional Gaps may improve confidence, but they must not keep evidence gathering alive on their own.",
+            "Every tool call must help close at least one Required Gap.",
+            "If all Required Gaps are closed, stop calling tools and return status ready.",
+            "If tools can no longer disambiguate a still-open Required Gap, return status needs_human instead of retrying the same theme.",
+            "Treat repeated tool calls that do not shrink Required Gaps as over-collection and stop before the budget becomes the only stopping mechanism.",
             "",
             "EvidenceBundle must be lightweight and include:",
             "- summary",
@@ -1430,6 +1441,11 @@ class Planner:
             "- missing_info",
             "- assumptions",
             "- ready_for_dsl",
+            "",
+            "Current evidence stop plan:",
+            self._render_evidence_stop_plan(stop_plan),
+            "",
+            self._build_evidence_few_shots(),
         ]
         if resume_payload is not None:
             parts.extend(
@@ -1477,6 +1493,155 @@ class Planner:
             return "(missing)"
         payload = evidence_bundle.model_dump(exclude_none=True)
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def _finalize_evidence_bundle(self, evidence_result: EvidenceAgentResult) -> EvidenceBundle:
+        bundle = evidence_result.evidence_bundle
+        bundle.assumptions = list(
+            dict.fromkeys(
+                [*bundle.assumptions, *evidence_result.assumptions]
+            )
+        )
+        bundle.missing_info = list(
+            dict.fromkeys(
+                [*bundle.missing_info, *evidence_result.missing_info]
+            )
+        )
+        if not bundle.ready_for_dsl and not bundle.missing_info:
+            bundle.ready_for_dsl = True
+        return bundle
+
+    def _build_evidence_stop_plan(self, request: PlannerRequest) -> EvidenceStopPlan:
+        if self._looks_like_simple_weapon_attack(request.instruction):
+            return EvidenceStopPlan(
+                action_shape="simple_single_target_weapon_attack",
+                required_gaps=[
+                    "attacker identity",
+                    "target identity",
+                    "attack modifier or canonical to_hit path",
+                    "target AC or canonical target AC path",
+                    "damage dice / bonus / damage type",
+                ],
+                optional_gaps=[
+                    "attacker HP",
+                    "target HP",
+                    "attacker AC",
+                    "extra rule citations",
+                    "additional non-blocking candidate paths",
+                ],
+                search_policy=(
+                    "For this action shape, prefer grep plus one batched read. "
+                    "Use search only as a rule fallback when a Required Gap still cannot be closed from known planning patterns and state facts."
+                ),
+                stop_rule=(
+                    "When every Required Gap above is closed, return status ready immediately. "
+                    "Do not keep searching for extra critical-hit rules or non-blocking state details."
+                ),
+            )
+        return EvidenceStopPlan(
+            action_shape="generic_action",
+            required_gaps=[
+                "entity or target facts needed to build the TaskDocument",
+                "state values that the final DSL must reference",
+                "rule facts that are still necessary to choose a valid DSL pattern",
+            ],
+            optional_gaps=[
+                "extra background rule text",
+                "non-blocking HP or AC checks",
+                "additional confidence-only evidence",
+            ],
+            search_policy=(
+                "Prefer state discovery first. "
+                "Use search only when a Required Gap is genuinely rule-shaped and cannot be resolved from the instruction, known planning patterns, or current state."
+            ),
+            stop_rule=(
+                "As soon as the remaining unknowns no longer block a valid TaskDocument, stop gathering evidence and return status ready."
+            ),
+        )
+
+    def _render_evidence_stop_plan(self, stop_plan: EvidenceStopPlan) -> str:
+        payload = stop_plan.model_dump(exclude_none=True)
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    def _build_evidence_few_shots(self) -> str:
+        return "\n".join(
+            [
+                "Few-shot sufficiency examples:",
+                "",
+                "Example 1: stop when a simple weapon attack already has its minimal closure",
+                'Instruction: "Goblin uses a scimitar to attack aldera."',
+                "Observed facts:",
+                "- actors.goblin_1.attacks.scimitar.to_hit = 4",
+                "- actors.goblin_1.attacks.scimitar.damage[0] = 1d6 +2 slashing",
+                "- actors.aldera.ac = 18",
+                "Required Gaps:",
+                "- attacker identity: closed",
+                "- target identity: closed",
+                "- attack modifier: closed",
+                "- target AC: closed",
+                "- damage spec: closed",
+                "Optional Gaps:",
+                "- attacker_hp: open",
+                "- target_hp: open",
+                "- extra critical-hit citations: open",
+                "Decision:",
+                "- Required Gaps are empty.",
+                "- Do not call more tools just to improve confidence.",
+                "- Return status ready with ready_for_dsl=true.",
+                "",
+                "Example 2: continue only when a Required Gap is still open",
+                'Instruction: "Wizard casts fire bolt at goblin_1."',
+                "Observed facts:",
+                "- caster identity: closed",
+                "- target identity: closed",
+                "- spell attack modifier: open",
+                "Decision:",
+                "- A Required Gap is still open.",
+                "- Continue tool use only if the next call can close spell attack modifier.",
+                "- Do not return ready yet.",
+                "",
+                "Example 3: ask for help instead of repeating the same theme",
+                'Instruction: "Goblin attacks the hero."',
+                "Observed facts:",
+                "- multiple goblins match the attacker phrase",
+                "- multiple heroes match the target phrase",
+                "- repeated grep variants are no longer narrowing the ambiguity",
+                "Decision:",
+                "- Required attacker/target identity gaps are still open.",
+                "- Tools are no longer disambiguating the action.",
+                "- Return status needs_human with concrete clarification questions.",
+            ]
+        )
+
+    def _looks_like_simple_weapon_attack(self, instruction: str) -> bool:
+        normalized = instruction.casefold()
+        attack_markers = (
+            " attack ",
+            " attacks ",
+            " attacking ",
+            "attack",
+            "attacks",
+            "攻击",
+        )
+        if not any(marker in normalized for marker in attack_markers):
+            return False
+        excluded_markers = (
+            "spell",
+            "cast",
+            "saving throw",
+            " save ",
+            " saves ",
+            "fireball",
+            "magic missile",
+            "cone",
+            "line",
+            "radius",
+            "area",
+            "法术",
+            "豁免",
+            "范围",
+            "火球",
+        )
+        return not any(marker in normalized for marker in excluded_markers)
 
     def _snapshot_request_input(self, agent_input: Any) -> Any:
         if isinstance(agent_input, Command):

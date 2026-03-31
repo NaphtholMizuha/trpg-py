@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool
 from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
+from augury.agent.planner_runtime_guards import get_active_planner_runtime_guard
 from augury.store import keys as list_state_keys
 
 DEFAULT_GREP_LIMIT = 5
@@ -93,6 +94,19 @@ class GrepTool(BaseTool):
     ) -> dict[str, Any]:
         normalized_terms = _normalize_terms(query=query, terms=terms or [])
         _log_grep_input(query=query, terms=normalized_terms, limit=limit, tool_name=self.name)
+        guard = get_active_planner_runtime_guard()
+        grep_theme = _build_grep_theme(query=query, terms=normalized_terms)
+        if guard is not None:
+            guarded_result = guard.short_circuit_grep(tool_name=self.name, theme=grep_theme)
+            if guarded_result is not None:
+                logger.warning(
+                    "tool_guard tool={} kind=repeated_theme theme={!r}",
+                    self.name,
+                    grep_theme,
+                )
+                validated = GrepResult.model_validate(guarded_result)
+                _log_grep_output(validated, tool_name=self.name)
+                return validated.model_dump(exclude_none=True)
         try:
             matches = grep_leaf_paths(self._resolve_state(), query=query, terms=normalized_terms, limit=limit)
             result = GrepResult(status="ok" if matches else "no_match", matches=matches)
@@ -102,7 +116,10 @@ class GrepTool(BaseTool):
                 error=GrepError(type=exc.__class__.__name__, message=str(exc)),
             )
         _log_grep_output(result, tool_name=self.name)
-        return result.model_dump(exclude_none=True)
+        payload = result.model_dump(exclude_none=True)
+        if guard is not None:
+            guard.record_grep_result(theme=grep_theme, result=payload)
+        return payload
 
     def _resolve_state(self) -> Any:
         if self.state_provider is not None:
@@ -233,6 +250,13 @@ def _build_reason(*, path: str, matched_terms: list[str]) -> str:
     if matched_terms:
         return f"matched terms {', '.join(matched_terms)} in leaf path {path}"
     return f"matched leaf path {path}"
+
+
+def _build_grep_theme(*, query: str | None, terms: list[str]) -> str | None:
+    if terms:
+        return " ".join(terms)
+    normalized_query = (query or "").strip().lower()
+    return normalized_query or None
 
 
 def _log_grep_input(

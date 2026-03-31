@@ -5,6 +5,7 @@ import unittest
 
 from loguru import logger
 
+from augury.agent.planner_runtime_guards import activate_planner_runtime_guard
 from augury.agent.tools import create_grep_tool, grep_leaf_paths
 
 
@@ -54,6 +55,19 @@ class GrepToolTests(unittest.TestCase):
         self.assertNotIn("error", output)
         logs = self.log_output.getvalue()
         self.assertIn("tool_output tool=grep status=no_match matches=0", logs)
+
+    def test_grep_tool_short_circuits_repeated_theme_with_runtime_guard(self) -> None:
+        tool = create_grep_tool(
+            state={"actors": {"goblin_1": {"attacks": {"scimitar": {"to_hit": 4}}}}}
+        )
+
+        with activate_planner_runtime_guard():
+            first = tool.invoke({"terms": ["goblin", "to_hit"]})
+            second = tool.invoke({"terms": ["goblin", "to_hit"]})
+
+        self.assertEqual(first, second)
+        logs = self.log_output.getvalue()
+        self.assertIn("tool_guard tool=grep kind=repeated_theme", logs)
 
     def test_grep_tool_returns_error_when_state_provider_fails(self) -> None:
         def broken_state_provider() -> dict[str, object]:
