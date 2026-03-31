@@ -25,34 +25,42 @@ class TaskDocumentSchema(BaseModel):
     steps: list[TaskStepSchema]
 
 
-class TaskBrief(BaseModel):
+class TaskDraft(BaseModel):
     instruction: str
     normalized_instruction: str
-    summary: str
-    action_shape: str = "task_brief"
-    grep_expressions: list[str] = Field(default_factory=list)
-    context_lines: list[str] = Field(default_factory=list)
-    state_bindings: dict[str, Any] = Field(default_factory=dict)
-    write_targets: list[str] = Field(default_factory=list)
+    task: str
+    reads: list[str] = Field(default_factory=list)
+    judgments: list[str] = Field(default_factory=list)
+    writes: list[str] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+    context_lines: list[str] = Field(default_factory=list)
+    read_values: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlannerWorkflowState(BaseModel):
     instruction: str
-    brief: TaskBrief | None = None
+    draft: TaskDraft | None = None
     task_document: dict[str, Any] | None = None
     lint_result: dict[str, Any] | None = None
+
+    @property
+    def brief(self) -> TaskDraft | None:
+        return self.draft
 
 
 class PlannerWorkflowResult(BaseModel):
     status: Literal["ready", "needs_human", "error"]
     instruction: str
-    brief: TaskBrief | None = None
+    draft: TaskDraft | None = None
     task_document: dict[str, Any] | None = None
     lint_result: dict[str, Any] | None = None
     missing_info: list[str] = Field(default_factory=list)
     error: str | None = None
+
+    @property
+    def brief(self) -> TaskDraft | None:
+        return self.draft
 
 
 TASK_DOCUMENT_OUTPUT_SCHEMA = TaskDocumentSchema.model_json_schema()
@@ -66,3 +74,7 @@ def validate_candidate_task_document(document: dict[str, Any] | None) -> None:
 def normalize_instruction(value: str) -> str:
     collapsed = re.sub(r"\s+", " ", value or "")
     return collapsed.strip()
+
+
+# Temporary compatibility alias while old imports are migrated.
+TaskBrief = TaskDraft

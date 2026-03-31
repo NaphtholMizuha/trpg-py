@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from augury.agent.tools import build_default_searcher, create_search_tool
+from augury.planner.tools import build_default_searcher, create_search_tool
 from augury.config import DEFAULT_PROJECT_CONFIG_PATH
 
 

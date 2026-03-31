@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from augury.agent.tools import create_lint_tool
+from augury.planner.tools import create_lint_tool
 
 
 DEFAULT_DOCUMENT_FILE = PROJECT_ROOT / "examples" / "goblin_scimitar_attack.json"

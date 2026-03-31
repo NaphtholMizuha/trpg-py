@@ -23,7 +23,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from smoke.state_loader import load_toml_state
-from augury.agent.tools import create_grep_tool
+from augury.planner.tools import create_grep_tool
 
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "config" / "world_state.toml"

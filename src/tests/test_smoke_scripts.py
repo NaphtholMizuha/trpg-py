@@ -7,7 +7,8 @@ from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smoke import test_grep, test_linter, test_reads, test_search
+from smoke import test_grep, test_linter, test_reads, test_search, test_task
+from augury.planner.task_document import TaskDraft
 
 
 class FakeSearcher:
@@ -77,6 +78,39 @@ def run_grep_script(*args: str) -> tuple[str, dict[str, object]]:
     return buffer.getvalue(), payload
 
 
+def build_fake_task_draft(*, instruction: str) -> TaskDraft:
+    return TaskDraft(
+        instruction=instruction,
+        normalized_instruction=instruction,
+        task="Read Aldera AC and carry it into the next planner step.",
+        reads=["actors.aldera.ac"],
+        judgments=["Use Aldera AC as the defensive threshold."],
+        writes=["actors.aldera.ac"],
+        missing_info=[],
+        assumptions=[],
+        context_lines=["actors.aldera.ac = 18"],
+        read_values={"actors.aldera.ac": 18},
+    )
+
+
+def run_task_script(*args: str) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    payload: dict[str, object] = {}
+
+    def fake_run(self, instruction: str) -> TaskDraft:  # type: ignore[no-untyped-def]
+        return build_fake_task_draft(instruction=instruction)
+
+    with patch("smoke.test_task.TaskNode.run", new=fake_run):
+        with patch("sys.argv", ["test_task.py", *args]):
+            with redirect_stdout(buffer):
+                raise_code = test_task.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"task smoke script returned unexpected code: {raise_code}")
+    if "--json" in args:
+        payload = json.loads(buffer.getvalue())
+    return buffer.getvalue(), payload
+
+
 class SmokeSearchScriptTests(unittest.TestCase):
     def test_search_smoke_script_supports_json_output(self) -> None:
         payload = run_search_script("--json", "fireball spell")
@@ -138,3 +172,25 @@ class SmokeGrepScriptTests(unittest.TestCase):
         self.assertIn("match demo :", output)
         self.assertIn("status     : ok", output)
         self.assertIn("status     : no_match", output)
+
+
+class SmokeTaskScriptTests(unittest.TestCase):
+    def test_task_smoke_script_supports_json_output(self) -> None:
+        _, payload = run_task_script("--json", "--instruction", "Track Aldera AC")
+
+        self.assertEqual("Track Aldera AC", payload["instruction"])
+        self.assertEqual("Read Aldera AC and carry it into the next planner step.", payload["task"])
+        self.assertEqual(["actors.aldera.ac"], payload["reads"])
+        self.assertEqual(["actors.aldera.ac"], payload["writes"])
+        self.assertIn("judgments", payload)
+        self.assertIn("missing_info", payload)
+
+    def test_task_smoke_script_prints_human_summary(self) -> None:
+        output, _ = run_task_script("--instruction", "Track Aldera AC")
+
+        self.assertIn("TRPG Planner TaskNode Smoke Test", output)
+        self.assertIn("instruction : Track Aldera AC", output)
+        self.assertIn("task        : Read Aldera AC and carry it into the next planner step.", output)
+        self.assertIn("reads       : 1", output)
+        self.assertIn("judgments   : 1", output)
+        self.assertIn("writes      : 1", output)

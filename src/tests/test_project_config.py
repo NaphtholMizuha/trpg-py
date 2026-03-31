@@ -39,6 +39,10 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertEqual("planner-key", first.planner.api_key)
         self.assertEqual("prompts", first.planner.prompt.directory)
         self.assertEqual("planner_system.txt", first.planner.prompt.system_file)
+        self.assertEqual("planner_task_node_system.txt", first.planner.task_node_prompt.system_file)
+        self.assertEqual("planner_task_node_user.txt", first.planner.task_node_prompt.user_file)
+        self.assertEqual("planner_dsl_node_system.txt", first.planner.dsl_node_prompt.system_file)
+        self.assertEqual("planner_dsl_node_user.txt", first.planner.dsl_node_prompt.user_file)
         self.assertEqual("world_state.toml", first.planner.smoke.world_state_file)
         self.assertEqual("https://search.example/v1", first.search.api.base_url)
         self.assertEqual("search-key", first.search.api.api_key)
@@ -54,7 +58,7 @@ class ProjectConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.toml"
             config_path.write_text(
-                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = \"oops\"\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.prompt]\ndirectory = \"prompts\"\nsystem_file = \"planner_system.txt\"\nuser_file = \"planner_user.txt\"\n\n[planner.smoke]\nworld_state_file = \"world_state.toml\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
+                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = \"oops\"\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.prompt]\ndirectory = \"prompts\"\nsystem_file = \"planner_system.txt\"\nuser_file = \"planner_user.txt\"\n\n[planner.task_node_prompt]\nsystem_file = \"planner_task_node_system.txt\"\nuser_file = \"planner_task_node_user.txt\"\n\n[planner.dsl_node_prompt]\nsystem_file = \"planner_dsl_node_system.txt\"\nuser_file = \"planner_dsl_node_user.txt\"\n\n[planner.smoke]\nworld_state_file = \"world_state.toml\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
                 encoding="utf-8",
             )
 
@@ -76,7 +80,7 @@ class ProjectConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.toml"
             config_path.write_text(
-                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = 4\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.prompt]\ndirectory = \"prompts\"\nsystem_file = \"planner_system.txt\"\nuser_file = \"planner_user.txt\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
+                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = 4\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.prompt]\ndirectory = \"prompts\"\nsystem_file = \"planner_system.txt\"\nuser_file = \"planner_user.txt\"\n\n[planner.task_node_prompt]\nsystem_file = \"planner_task_node_system.txt\"\nuser_file = \"planner_task_node_user.txt\"\n\n[planner.dsl_node_prompt]\nsystem_file = \"planner_dsl_node_system.txt\"\nuser_file = \"planner_dsl_node_user.txt\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
                 encoding="utf-8",
             )
 

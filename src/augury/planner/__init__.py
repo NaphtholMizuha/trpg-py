@@ -1,7 +1,8 @@
 from augury.planner.task_document import (
-    PlannerWorkflowResult,
     PlannerWorkflowState,
+    PlannerWorkflowResult,
     TaskBrief,
+    TaskDraft,
     validate_candidate_task_document,
 )
 from augury.planner.workflow import PlannerWorkflow, PlannerWorkflowDependencies, create_planner_workflow
@@ -12,6 +13,7 @@ __all__ = [
     "PlannerWorkflowResult",
     "PlannerWorkflowState",
     "TaskBrief",
+    "TaskDraft",
     "create_planner_workflow",
     "validate_candidate_task_document",
 ]

@@ -25,6 +25,14 @@ def write_project_config(
         "Budget: {{tool_budget}}\n"
         "Repair: {{validation_feedback}}"
     ),
+    planner_task_node_system_file: str = "planner_task_node_system.txt",
+    planner_task_node_user_file: str = "planner_task_node_user.txt",
+    planner_task_node_system_prompt_template: str = "Task node system prompt",
+    planner_task_node_user_prompt_template: str = "Task node user prompt: {{instruction}}",
+    planner_dsl_node_system_file: str = "planner_dsl_node_system.txt",
+    planner_dsl_node_user_file: str = "planner_dsl_node_user.txt",
+    planner_dsl_node_system_prompt_template: str = "DSL node system prompt",
+    planner_dsl_node_user_prompt_template: str = "DSL node user prompt: {{task_draft_json}}",
     planner_smoke_world_state_file: str = "world_state.toml",
     planner_smoke_world_state_template: str = (
         "[actors.goblin_1]\n"
@@ -65,6 +73,22 @@ def write_project_config(
         planner_user_prompt_template,
         encoding="utf-8",
     )
+    (prompt_dir / planner_task_node_system_file).write_text(
+        planner_task_node_system_prompt_template,
+        encoding="utf-8",
+    )
+    (prompt_dir / planner_task_node_user_file).write_text(
+        planner_task_node_user_prompt_template,
+        encoding="utf-8",
+    )
+    (prompt_dir / planner_dsl_node_system_file).write_text(
+        planner_dsl_node_system_prompt_template,
+        encoding="utf-8",
+    )
+    (prompt_dir / planner_dsl_node_user_file).write_text(
+        planner_dsl_node_user_prompt_template,
+        encoding="utf-8",
+    )
     (path.parent / planner_smoke_world_state_file).write_text(
         planner_smoke_world_state_template,
         encoding="utf-8",
@@ -84,6 +108,14 @@ tool_budget = {planner_tool_budget}
 directory = "{planner_prompt_directory}"
 system_file = "{planner_prompt_system_file}"
 user_file = "{planner_prompt_user_file}"
+
+[planner.task_node_prompt]
+system_file = "{planner_task_node_system_file}"
+user_file = "{planner_task_node_user_file}"
+
+[planner.dsl_node_prompt]
+system_file = "{planner_dsl_node_system_file}"
+user_file = "{planner_dsl_node_user_file}"
 
 [planner.smoke]
 world_state_file = "{planner_smoke_world_state_file}"

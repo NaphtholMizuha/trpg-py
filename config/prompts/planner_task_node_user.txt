@@ -1,0 +1,18 @@
+{
+  "instruction": "{{instruction}}",
+  "requirements": [
+    "Normalize the instruction.",
+    "Write a task draft as an execution plan, not an evidence checklist.",
+    "Use grep to find candidate entity, equipment, resource, and target paths before drafting.",
+    "For multi-word grep terms, use a quoted phrase or an explicit boolean expression. Do not send invalid bare strings with spaces.",
+    "When grep terms are broad, request more than a tiny limit so that relevant lines are not truncated too early.",
+    "reads must contain only exact dot paths supported by the instruction or grep context lines.",
+    "writes must contain only exact dot paths supported by the instruction or grep context lines.",
+    "Do not put prose descriptions inside reads or writes.",
+    "Do not invent paths like monsters.*, weapons.*, or nested fields that are not confirmed by evidence.",
+    "judgments must describe actual game resolution logic, not research steps like confirm/check/inspect.",
+    "If a target HP path is confirmed and the instruction is an attack or damage action, writes should usually include that HP path.",
+    "If an actor resource path is confirmed and the instruction consumes it, writes should include that resource path.",
+    "If an exact read path, write path, or required value cannot be confirmed safely, add it to missing_info instead of guessing."
+  ]
+}

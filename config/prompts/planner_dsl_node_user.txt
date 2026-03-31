@@ -1,0 +1,9 @@
+{
+  "task_draft": {{task_draft_json}},
+  "requirements": [
+    "Build a valid TaskDocument.",
+    "Use the TaskDraft as the source of truth.",
+    "Use the reads and judgments to decide what data is referenced.",
+    "Use the writes list when constructing state/resource/effect steps."
+  ]
+}

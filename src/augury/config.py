@@ -30,11 +30,18 @@ class PlannerConfig(BaseModel):
     max_planning_rounds: int = Field(ge=1)
     tool_budget: int = Field(ge=1)
     prompt: "PlannerPromptConfig"
+    task_node_prompt: "PlannerNodePromptConfig"
+    dsl_node_prompt: "PlannerNodePromptConfig"
     smoke: "PlannerSmokeConfig"
 
 
 class PlannerPromptConfig(BaseModel):
     directory: str = Field(min_length=1)
+    system_file: str = Field(min_length=1)
+    user_file: str = Field(min_length=1)
+
+
+class PlannerNodePromptConfig(BaseModel):
     system_file: str = Field(min_length=1)
     user_file: str = Field(min_length=1)
 
@@ -177,6 +184,7 @@ __all__ = [
     "DEFAULT_PROJECT_CONFIG_PATH",
     "PROJECT_LEVEL_CONFIG_SECTIONS",
     "PlannerConfig",
+    "PlannerNodePromptConfig",
     "PlannerPromptConfig",
     "PlannerSmokeConfig",
     "ProjectConfig",

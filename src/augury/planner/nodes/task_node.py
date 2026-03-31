@@ -13,48 +13,60 @@ from augury.planner.prompt_loader import (
     load_planner_node_prompts,
     render_prompt_template,
 )
-from augury.planner.task_document import TaskDocumentSchema, TaskDraft
+from augury.planner.task_document import TaskDraft, normalize_instruction
 
-DslAgentFactory = Callable[..., Any]
+TaskAgentFactory = Callable[..., Any]
 
 
 @dataclass(slots=True)
-class DslNodeDependencies:
-    lint_tool: Any | None = None
+class TaskNodeDependencies:
+    grep_tool: Any | None = None
+    read_tool: Any | None = None
+    search_tool: Any | None = None
     model: str | None = None
     system_prompt: str | None = None
     user_prompt_template: str | None = None
     project_config: ProjectConfig | None = None
     config_path: str | Path | None = None
-    agent_factory: DslAgentFactory = create_agent
+    agent_factory: TaskAgentFactory = create_agent
 
 
-class DslNode:
-    def __init__(self, dependencies: DslNodeDependencies | None = None) -> None:
-        self.dependencies = dependencies or DslNodeDependencies()
+class TaskNode:
+    def __init__(self, dependencies: TaskNodeDependencies | None = None) -> None:
+        self.dependencies = dependencies or TaskNodeDependencies()
         self._agent: Any | None = None
 
     @property
     def tools(self) -> list[Any]:
-        return [tool for tool in [self.dependencies.lint_tool] if tool is not None]
+        tools = [
+            self.dependencies.grep_tool,
+            self.dependencies.search_tool,
+        ]
+        return [tool for tool in tools if tool is not None]
 
-    def run(self, draft: TaskDraft) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    def run(self, instruction: str) -> TaskDraft:
         agent = self._get_agent()
         response = agent.invoke(
             {
                 "messages": [
                     {
                         "role": "user",
-                        "content": _build_dsl_user_message(draft, self.dependencies),
+                        "content": _build_task_user_message(instruction, self.dependencies),
                     }
                 ]
             }
         )
-        document = _coerce_task_document(response)
-        lint_result = None
-        if self.dependencies.lint_tool is not None:
-            lint_result = self.dependencies.lint_tool.invoke({"task_document": document})
-        return document, lint_result
+        draft = _coerce_task_draft(response)
+        normalized_instruction = normalize_instruction(instruction)
+        if not draft.normalized_instruction:
+            draft = draft.model_copy(update={"normalized_instruction": normalized_instruction})
+        if not draft.instruction:
+            draft = draft.model_copy(update={"instruction": instruction})
+        if not draft.task:
+            draft = draft.model_copy(
+                update={"task": normalized_instruction or "Draft a planner task from the instruction."}
+            )
+        return draft
 
     def _get_agent(self) -> Any:
         if self._agent is None:
@@ -63,13 +75,13 @@ class DslNode:
                 model=_resolve_model(self.dependencies),
                 tools=self.tools,
                 system_prompt=prompt_set.system_prompt,
-                response_format=TaskDocumentSchema,
-                name="planner_dsl_node",
+                response_format=TaskDraft,
+                name="planner_task_node",
             )
         return self._agent
 
 
-def _resolve_model(dependencies: DslNodeDependencies) -> str:
+def _resolve_model(dependencies: TaskNodeDependencies) -> str:
     return load_planner_chat_model(
         project_config=dependencies.project_config,
         config_path=dependencies.config_path,
@@ -77,34 +89,33 @@ def _resolve_model(dependencies: DslNodeDependencies) -> str:
     )
 
 
-def _build_dsl_user_message(draft: TaskDraft, dependencies: DslNodeDependencies | None = None) -> str:
-    prompt_set = _resolve_prompt_set(dependencies or DslNodeDependencies())
+def _build_task_user_message(instruction: str, dependencies: TaskNodeDependencies | None = None) -> str:
+    prompt_set = _resolve_prompt_set(dependencies or TaskNodeDependencies())
     return render_prompt_template(
         prompt_set.user_prompt_template,
-        {"task_draft_json": draft.model_dump_json(indent=2)},
+        {"instruction": instruction},
     )
 
 
-def _coerce_task_document(response: Any) -> dict[str, Any]:
+def _coerce_task_draft(response: Any) -> TaskDraft:
     candidate = response
     if isinstance(response, dict) and "structured_response" in response:
         candidate = response["structured_response"]
-    if isinstance(candidate, TaskDocumentSchema):
-        return candidate.model_dump()
+    if isinstance(candidate, TaskDraft):
+        return candidate
     if hasattr(candidate, "model_dump"):
         candidate = candidate.model_dump()
-    validated = TaskDocumentSchema.model_validate(candidate)
-    return validated.model_dump()
+    return TaskDraft.model_validate(candidate)
 
 
-def _resolve_prompt_set(dependencies: DslNodeDependencies):
+def _resolve_prompt_set(dependencies: TaskNodeDependencies):
     if dependencies.system_prompt is not None and dependencies.user_prompt_template is not None:
         return PlannerNodePrompts(
             system_prompt=dependencies.system_prompt,
             user_prompt_template=dependencies.user_prompt_template,
         )
     loaded = load_planner_node_prompts(
-        node_name="dsl_node",
+        node_name="task_node",
         project_config=dependencies.project_config,
         config_path=dependencies.config_path,
     )

@@ -16,6 +16,14 @@ directory = "prompts"
 system_file = "planner_system.txt"
 user_file = "planner_user.txt"
 
+[planner.task_node_prompt]
+system_file = "planner_task_node_system.txt"
+user_file = "planner_task_node_user.txt"
+
+[planner.dsl_node_prompt]
+system_file = "planner_dsl_node_system.txt"
+user_file = "planner_dsl_node_user.txt"
+
 [planner.smoke]
 world_state_file = "world_state.toml"
 
