@@ -192,6 +192,7 @@ class Retriever:
         self,
         query: str,
         *,
+        mode: str | None = None,
         limit: int | None = None,
         fetch_k: int | None = None,
     ) -> list[RetrievedDocument]:
@@ -200,14 +201,14 @@ class Retriever:
             raise ValueError("query must not be empty")
         result_limit = limit or self.default_limit
         candidate_limit = max(fetch_k or self.default_fetch_k, result_limit)
-        points = self._query_points(normalized_query, candidate_limit)
+        points = self._query_points(normalized_query, candidate_limit, mode=mode)
         if not points:
             return []
-        hits = self._rerank_points(normalized_query, points, result_limit)
+        hits = self._rerank_points(normalized_query, points, result_limit, mode=mode)
         self._attach_parent_context(hits)
         return hits
 
-    def _query_points(self, query: str, fetch_k: int) -> list[Any]:
+    def _query_points(self, query: str, fetch_k: int, *, mode: str | None = None) -> list[Any]:
         dense_vectors = self.dense_embedder.embed([query])
         sparse_vectors = self.sparse_embedder.embed([query])
         if not dense_vectors:
@@ -229,7 +230,14 @@ class Retriever:
         )
         return list(getattr(response, "points", []) or [])
 
-    def _rerank_points(self, query: str, points: list[Any], limit: int) -> list[RetrievedDocument]:
+    def _rerank_points(
+        self,
+        query: str,
+        points: list[Any],
+        limit: int,
+        *,
+        mode: str | None = None,
+    ) -> list[RetrievedDocument]:
         candidate_points: list[Any] = []
         documents: list[str] = []
         for point in points:

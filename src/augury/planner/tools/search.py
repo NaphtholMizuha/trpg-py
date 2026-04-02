@@ -36,12 +36,24 @@ class SearchResult(BaseModel):
     error: SearchError | None = None
 
 
+SearchMode = Literal["term", "balanced", "semantic"]
+
+
 class SearchInput(BaseModel):
     query: str = Field(
         min_length=1,
         description=(
-            "用于检索规则原文的自然语言查询。"
-            "优先用完整问题或具体场景描述，而不是只写零散关键词。"
+            "用于检索规则原文的查询。"
+            "如果 mode=term，优先保留明确规则术语并保持简短。"
+            "如果 mode=balanced，保留术语锚点并补充少量结算信息。"
+            "如果 mode=semantic，再使用中文自然语言的规则场景描述。"
+        ),
+    )
+    mode: SearchMode = Field(
+        default="balanced",
+        description=(
+            "检索模式。term 用于明确规则术语，balanced 用于术语加少量结算细节，"
+            "semantic 用于没有可靠术语锚点时的规则场景描述。"
         ),
     )
     limit: int = Field(default=3, ge=1, le=20, description="最终返回的命中数量")
@@ -89,14 +101,24 @@ class HybridRuleSearcher:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.retriever, name)
 
-    def search(self, query: str, *, limit: int | None = None, fetch_k: int | None = None) -> SearchResult:
-        return run_search(self.retriever, query=query, limit=limit, fetch_k=fetch_k)
+    def search(
+        self,
+        query: str,
+        *,
+        mode: SearchMode = "balanced",
+        limit: int | None = None,
+        fetch_k: int | None = None,
+    ) -> SearchResult:
+        return run_search(self.retriever, query=query, mode=mode, limit=limit, fetch_k=fetch_k)
 
 
 class SearchTool(BaseTool):
     name: str = "search"
     description: str = (
-        "检索规则原文证据。工具会执行 dense + sparse 混合召回并使用 reranker 重排，"
+        "检索规则原文证据。使用 mode=term 定位明确规则术语，"
+        "mode=balanced 保留术语锚点并补少量结算细节，"
+        "mode=semantic 在没有可靠术语锚点时查询规则场景。"
+        "工具会执行 dense + sparse 混合召回并使用 reranker 重排，"
         "返回原始命中文本和必要元数据，不会替你做规则结论。"
     )
     args_schema: type[BaseModel] = SearchInput
@@ -104,10 +126,17 @@ class SearchTool(BaseTool):
     retriever: Retriever = Field(exclude=True)
     searcher: HybridRuleSearcher = Field(exclude=True)
 
-    def _run(self, query: str, limit: int = 3, fetch_k: int | None = None) -> dict[str, Any]:
+    def _run(
+        self,
+        query: str,
+        mode: SearchMode = "balanced",
+        limit: int = 3,
+        fetch_k: int | None = None,
+    ) -> dict[str, Any]:
         return run_search(
             self.retriever,
             query=query,
+            mode=mode,
             limit=limit,
             fetch_k=fetch_k,
         ).model_dump(exclude_none=True)
@@ -117,13 +146,14 @@ def run_search(
     retriever: Retriever,
     *,
     query: str,
+    mode: SearchMode = "balanced",
     limit: int | None = None,
     fetch_k: int | None = None,
 ) -> SearchResult:
     normalized_query = query.strip()
     result_limit = limit or retriever.default_limit
     candidate_limit = max(fetch_k or retriever.default_fetch_k, result_limit)
-    _log_search_input(query=normalized_query, limit=result_limit, fetch_k=candidate_limit)
+    _log_search_input(query=normalized_query, mode=mode, limit=result_limit, fetch_k=candidate_limit)
     if not normalized_query:
         result = SearchResult(
             status="error",
@@ -135,6 +165,7 @@ def run_search(
     try:
         documents = retriever.retrieve(
             normalized_query,
+            mode=mode,
             limit=result_limit,
             fetch_k=candidate_limit,
         )
@@ -217,9 +248,10 @@ def _retrieved_document_to_search_hit(document: RetrievedDocument, *, rank: int)
     )
 
 
-def _log_search_input(*, query: str, limit: int, fetch_k: int) -> None:
+def _log_search_input(*, query: str, mode: SearchMode, limit: int, fetch_k: int) -> None:
     logger.info(
-        "tool_input tool=search query={!r} limit={} fetch_k={}",
+        "tool_input tool=search mode={} query={!r} limit={} fetch_k={}",
+        mode,
         query,
         limit,
         fetch_k,

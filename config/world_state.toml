@@ -10,13 +10,18 @@ challenge_rating = "1/4"
 proficiency_bonus = 2
 position = { x = 4, y = 10 }
 facing = "west"
-ac = 13
-ac_breakdown = "皮甲11 + 敏捷2"
 hp = { current = 7, max = 7, temporary = 0 }
 speed = 30
 languages = ["通用语", "地精语"]
 traits = ["nimble_escape"]
 notes = "擅长近战骚扰，偏好先用弯刀贴身攻击，必要时用敏捷脱离。"
+
+[actors.goblin_1.ac]
+total = 13
+breakdown = [
+    {reason = "皮甲", value = 11},
+    {reason = "敏捷", value = 2},
+]
 
 [actors.goblin_1.senses]
 darkvision = 60
@@ -79,8 +84,6 @@ xp = 6500
 proficiency_bonus = 3
 position = { x = 5, y = 10 }
 facing = "east"
-ac = 18
-ac_breakdown = "链甲16 + 盾牌2 + 防护戒指1 + 防御风格1"
 hp = { current = 30, max = 44, temporary = 0 }
 speed = 30
 initiative_modifier = 1
@@ -93,6 +96,15 @@ save_advantages = ["抗魅惑豁免优势（精灵血统）"]
 spell_dc = 15
 spell_attack_bonus = 7
 notes = "艾尔德拉正与哥布林近战缠斗，仍保有反应和附赠动作。"
+
+[actors.aldera.ac]
+total = 18
+breakdown = [
+    {reason = "链甲", value = 16},
+    {reason = "盾牌", value = 2},
+    {reason = "防护戒指", value = 1},
+    {reason = "防御风格", value = 1},
+]
 
 [actors.aldera.senses]
 darkvision = 60
@@ -172,6 +184,10 @@ current = 4
 max = 4
 
 [actors.aldera.spell_slots.level_2]
+current = 3
+max = 3
+
+[actors.aldera.spell_slots.level_3]
 current = 2
 max = 2
 
@@ -179,6 +195,7 @@ max = 2
 cantrips = ["圣火术"]
 level_1 = ["回复术", "神恩", "护盾术", "圣光术"]
 level_2 = ["迷雾步", "branding smite"]
+level_3 = ["火球术"]
 
 [actors.aldera.weapon]
 main_hand = "+1长剑"

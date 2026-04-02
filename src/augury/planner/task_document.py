@@ -29,13 +29,28 @@ class TaskDraft(BaseModel):
     instruction: str
     normalized_instruction: str
     task: str
-    reads: list[str] = Field(default_factory=list)
-    judgments: list[str] = Field(default_factory=list)
+    reads: list[str] = Field(
+        default_factory=list,
+        description="Exact state paths needed to resolve the task, including range and position prerequisites when relevant.",
+    )
+    judgments: list[str] = Field(
+        default_factory=list,
+        description="Resolution logic in execution order. Area effects should first determine coverage, then resolve each affected creature.",
+    )
     writes: list[str] = Field(default_factory=list)
-    missing_info: list[str] = Field(default_factory=list)
+    missing_info: list[str] = Field(
+        default_factory=list,
+        description="Explicit gaps that block safe execution, such as missing slot-level, burst-center, or position evidence.",
+    )
     assumptions: list[str] = Field(default_factory=list)
-    context_lines: list[str] = Field(default_factory=list)
-    read_values: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[str] = Field(
+        default_factory=list,
+        description="Short rule or decisive state excerpts that help the next stage understand the task shape.",
+    )
+    states: list[str] = Field(
+        default_factory=list,
+        description="Short state-evidence lines supporting reads, writes, and range-coverage prerequisites.",
+    )
 
 
 class PlannerWorkflowState(BaseModel):

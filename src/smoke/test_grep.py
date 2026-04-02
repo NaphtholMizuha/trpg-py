@@ -96,7 +96,11 @@ def print_human_result(result: dict[str, Any]) -> None:
         return
     print(f"matches    : {len(matches)}")
     for item in matches[:5]:
-        print(f"- {item}")
+        print(
+            "- "
+            + f"{item.get('key')} = {json.dumps(item.get('value'), ensure_ascii=False) if not isinstance(item.get('value'), str) else item.get('value')}"
+            + f" (sim={item.get('sim')})"
+        )
 
 
 if __name__ == "__main__":

@@ -2,17 +2,26 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smoke import test_grep, test_linter, test_reads, test_search, test_task
+from smoke import test_dsl, test_grep, test_linter, test_reads, test_search, test_task
 from augury.planner.task_document import TaskDraft
 
 
 class FakeSearcher:
-    def search(self, query: str, *, limit: int, fetch_k: int) -> SimpleNamespace:
+    def search(
+        self,
+        query: str,
+        *,
+        mode: str = "balanced",
+        limit: int,
+        fetch_k: int,
+    ) -> SimpleNamespace:
         return SimpleNamespace(
             model_dump=lambda exclude_none=True: {
                 "status": "ok",
@@ -20,7 +29,7 @@ class FakeSearcher:
                     {
                         "rank": 1,
                         "score": 0.91,
-                        "text": f"rule snippet for {query}",
+                        "text": f"rule snippet for {query} [{mode}]",
                         "metadata": {"title": "Fireball", "file": "phb"},
                     }
                 ],
@@ -82,14 +91,30 @@ def build_fake_task_draft(*, instruction: str) -> TaskDraft:
     return TaskDraft(
         instruction=instruction,
         normalized_instruction=instruction,
-        task="Read Aldera AC and carry it into the next planner step.",
-        reads=["actors.aldera.ac"],
-        judgments=["Use Aldera AC as the defensive threshold."],
-        writes=["actors.aldera.ac"],
-        missing_info=[],
+        task="先确认哪些对象位于火球爆炸半径内，再对每个受影响对象结算敏捷豁免与火焰伤害。",
+        reads=[
+            "actors.aldera.spell_dc",
+            "actors.aldera.spell_slots.level_3.current",
+            "actors.aldera.position.x",
+            "actors.goblin_1.position.x",
+            "actors.goblin_1.abilities.dex.save",
+            "actors.goblin_1.hp.current",
+        ],
+        judgments=[
+            "先根据位置与爆炸范围确认哪些对象位于火球术覆盖范围内。",
+            "goblin_1 makes a Dexterity saving throw against Aldera's spell DC.",
+        ],
+        writes=["actors.aldera.spell_slots.level_3.current", "actors.goblin_1.hp.current"],
+        missing_info=["若未明确爆点，仍需确认火球爆炸中心位置。"],
         assumptions=[],
-        context_lines=["actors.aldera.ac = 18"],
-        read_values={"actors.aldera.ac": 18},
+        evidence=["火球术：20尺半径范围，敏捷豁免，失败全伤，成功半伤"],
+        states=[
+            "actors.aldera.spell_slots.level_3.current = 2",
+            "actors.aldera.position.x = 5",
+            "actors.goblin_1.position.x = 4",
+            "actors.goblin_1.abilities.dex.save = 2",
+            "actors.goblin_1.hp.current = 7",
+        ],
     )
 
 
@@ -111,12 +136,80 @@ def run_task_script(*args: str) -> tuple[str, dict[str, object]]:
     return buffer.getvalue(), payload
 
 
+def build_fake_task_document() -> dict[str, object]:
+    return {
+        "task_id": "planner.resolve-fireball-vs-goblin",
+        "version": 1,
+        "policy": {},
+        "context": {
+            "instruction": "Aldera用火球术攻击goblin",
+            "task_draft": build_fake_task_draft(instruction="Aldera用火球术攻击goblin").model_dump(),
+        },
+        "steps": [
+            {
+                "id": "consume_slot",
+                "type": "state",
+                "kind": "set",
+                "args": {"path": "actors.aldera.spell_slots.level_3.current", "value": 1},
+            }
+        ],
+    }
+
+
+def build_fake_lint_result() -> dict[str, object]:
+    return {
+        "status": "valid",
+        "summary": "task document is executable",
+        "issues": [],
+    }
+
+
+def run_dsl_script(*args: str) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    payload: dict[str, object] = {}
+
+    def fake_run(self, draft: TaskDraft) -> tuple[dict[str, object], dict[str, object]]:  # type: ignore[no-untyped-def]
+        return build_fake_task_document(), build_fake_lint_result()
+
+    with patch("smoke.test_dsl.DslNode.run", new=fake_run):
+        with patch("sys.argv", ["test_dsl.py", *args]):
+            with redirect_stdout(buffer):
+                raise_code = test_dsl.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"dsl smoke script returned unexpected code: {raise_code}")
+    if "--json" in args:
+        payload = json.loads(buffer.getvalue())
+    return buffer.getvalue(), payload
+
+
 class SmokeSearchScriptTests(unittest.TestCase):
     def test_search_smoke_script_supports_json_output(self) -> None:
         payload = run_search_script("--json", "fireball spell")
 
         self.assertEqual("ok", payload["status"])
         self.assertEqual("Fireball", payload["hits"][0]["metadata"]["title"])
+
+    def test_search_smoke_script_supports_mode_argument(self) -> None:
+        payload = run_search_script("--json", "--mode", "term", "火球术 Fireball")
+
+        self.assertEqual("ok", payload["status"])
+        self.assertIn("[term]", payload["hits"][0]["text"])
+
+    def test_search_smoke_script_keeps_fireball_balanced_query_anchor(self) -> None:
+        query = "火球术 Fireball：目标进行什么豁免，伤害如何结算，成功时是否减半"
+        payload = run_search_script("--json", "--mode", "balanced", query)
+
+        self.assertEqual("ok", payload["status"])
+        self.assertIn(query, payload["hits"][0]["text"])
+        self.assertIn("[balanced]", payload["hits"][0]["text"])
+
+    def test_search_smoke_script_supports_semantic_rule_queries(self) -> None:
+        query = "一个范围法术要求目标进行敏捷豁免，失败受到火焰伤害，成功伤害减半"
+        payload = run_search_script("--json", "--mode", "semantic", query)
+
+        self.assertEqual("ok", payload["status"])
+        self.assertIn(query, payload["hits"][0]["text"])
+        self.assertIn("[semantic]", payload["hits"][0]["text"])
 
 
 class SmokeLinterScriptTests(unittest.TestCase):
@@ -164,6 +257,9 @@ class SmokeGrepScriptTests(unittest.TestCase):
         self.assertEqual("ok", payload["match"]["status"])
         self.assertEqual("no_match", payload["no_match"]["status"])
         self.assertTrue(payload["match"]["matches"])
+        self.assertIn("key", payload["match"]["matches"][0])
+        self.assertIn("value", payload["match"]["matches"][0])
+        self.assertIn("sim", payload["match"]["matches"][0])
 
     def test_grep_smoke_script_prints_human_summary(self) -> None:
         output, _ = run_grep_script()
@@ -172,25 +268,100 @@ class SmokeGrepScriptTests(unittest.TestCase):
         self.assertIn("match demo :", output)
         self.assertIn("status     : ok", output)
         self.assertIn("status     : no_match", output)
+        self.assertIn("(sim=", output)
 
 
 class SmokeTaskScriptTests(unittest.TestCase):
     def test_task_smoke_script_supports_json_output(self) -> None:
-        _, payload = run_task_script("--json", "--instruction", "Track Aldera AC")
+        _, payload = run_task_script("--json", "--instruction", "Aldera用火球术攻击goblin")
 
-        self.assertEqual("Track Aldera AC", payload["instruction"])
-        self.assertEqual("Read Aldera AC and carry it into the next planner step.", payload["task"])
-        self.assertEqual(["actors.aldera.ac"], payload["reads"])
-        self.assertEqual(["actors.aldera.ac"], payload["writes"])
+        self.assertEqual("Aldera用火球术攻击goblin", payload["instruction"])
+        self.assertEqual("先确认哪些对象位于火球爆炸半径内，再对每个受影响对象结算敏捷豁免与火焰伤害。", payload["task"])
+        self.assertEqual(
+            [
+                "actors.aldera.spell_dc",
+                "actors.aldera.spell_slots.level_3.current",
+                "actors.aldera.position.x",
+                "actors.goblin_1.position.x",
+                "actors.goblin_1.abilities.dex.save",
+                "actors.goblin_1.hp.current",
+            ],
+            payload["reads"],
+        )
+        self.assertEqual(["actors.aldera.spell_slots.level_3.current", "actors.goblin_1.hp.current"], payload["writes"])
         self.assertIn("judgments", payload)
         self.assertIn("missing_info", payload)
+        self.assertEqual(["火球术：20尺半径范围，敏捷豁免，失败全伤，成功半伤"], payload["evidence"])
+        self.assertEqual(
+            [
+                "actors.aldera.spell_slots.level_3.current = 2",
+                "actors.aldera.position.x = 5",
+                "actors.goblin_1.position.x = 4",
+                "actors.goblin_1.abilities.dex.save = 2",
+                "actors.goblin_1.hp.current = 7",
+            ],
+            payload["states"],
+        )
+        self.assertIn("爆点", payload["missing_info"][0])
+        self.assertNotIn("read_values", payload)
+        self.assertNotIn("context_lines", payload)
 
     def test_task_smoke_script_prints_human_summary(self) -> None:
-        output, _ = run_task_script("--instruction", "Track Aldera AC")
+        output, _ = run_task_script("--instruction", "Aldera用火球术攻击goblin")
 
         self.assertIn("TRPG Planner TaskNode Smoke Test", output)
-        self.assertIn("instruction : Track Aldera AC", output)
-        self.assertIn("task        : Read Aldera AC and carry it into the next planner step.", output)
-        self.assertIn("reads       : 1", output)
-        self.assertIn("judgments   : 1", output)
-        self.assertIn("writes      : 1", output)
+        self.assertIn("instruction : Aldera用火球术攻击goblin", output)
+        self.assertIn("task        : 先确认哪些对象位于火球爆炸半径内，再对每个受影响对象结算敏捷豁免与火焰伤害。", output)
+        self.assertIn("reads       : 6", output)
+        self.assertIn("judgments   : 2", output)
+        self.assertIn("writes      : 2", output)
+        self.assertIn("evidence    : 1", output)
+        self.assertIn("states      : 5", output)
+
+    def test_task_smoke_script_saves_task_draft_to_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "output"
+            with patch("smoke.test_task.DEFAULT_OUTPUT_DIR", output_dir):
+                _, payload = run_task_script("--json", "--instruction", "Aldera用火球术攻击goblin")
+
+            canonical_path = output_dir / "task_draft.json"
+            snapshot_path = output_dir / "task_draft_aldera用火球术攻击goblin.json"
+
+            self.assertTrue(canonical_path.exists())
+            self.assertTrue(snapshot_path.exists())
+            self.assertEqual(payload, json.loads(canonical_path.read_text(encoding="utf-8")))
+            self.assertEqual(payload, json.loads(snapshot_path.read_text(encoding="utf-8")))
+
+
+class SmokeDslScriptTests(unittest.TestCase):
+    def test_dsl_smoke_script_supports_json_output(self) -> None:
+        _, payload = run_dsl_script("--json")
+
+        self.assertEqual("Aldera用火球术攻击goblin", payload["draft"]["instruction"])
+        self.assertEqual("planner.resolve-fireball-vs-goblin", payload["task_document"]["task_id"])
+        self.assertEqual("valid", payload["lint_result"]["status"])
+        self.assertIn("steps", payload["task_document"])
+
+    def test_dsl_smoke_script_prints_human_summary(self) -> None:
+        output, _ = run_dsl_script()
+
+        self.assertIn("TRPG Planner DslNode Smoke Test", output)
+        self.assertIn("instruction : Aldera用火球术攻击goblin", output)
+        self.assertIn("task_id     : planner.resolve-fireball-vs-goblin", output)
+        self.assertIn("lint_status : valid", output)
+        self.assertIn("task_document:", output)
+        self.assertIn("lint_result:", output)
+
+    def test_dsl_smoke_script_supports_custom_draft_file(self) -> None:
+        custom_draft = build_fake_task_draft(instruction="Malik用长剑攻击Aldera")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            draft_path = Path(temp_dir) / "custom_task_draft.json"
+            draft_path.write_text(
+                json.dumps(custom_draft.model_dump(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            _, payload = run_dsl_script("--json", "--draft-file", str(draft_path))
+
+        self.assertEqual("Malik用长剑攻击Aldera", payload["draft"]["instruction"])
+        self.assertEqual("planner.resolve-fireball-vs-goblin", payload["task_document"]["task_id"])

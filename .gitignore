@@ -3,3 +3,6 @@ __pycache__/
 .codex
 .venv
 logs/
+output
+.codex
+.claude

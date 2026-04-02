@@ -29,6 +29,7 @@ from augury.config import DEFAULT_PROJECT_CONFIG_PATH
 
 
 DEFAULT_QUERY = "fireball spell dexterity save 8d6 fire damage"
+DEFAULT_MODE = "balanced"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=DEFAULT_QUERY,
         help=f"检索问题或关键词，默认: {DEFAULT_QUERY!r}",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("term", "balanced", "semantic"),
+        default=DEFAULT_MODE,
+        help=f"检索模式，默认: {DEFAULT_MODE}",
     )
     parser.add_argument(
         "--config",
@@ -81,10 +88,15 @@ def main() -> int:
     if args.tool:
         tool = create_search_tool(searcher=searcher)
         result: dict[str, Any] = tool.invoke(
-            {"query": args.query, "limit": args.limit, "fetch_k": args.fetch_k}
+            {"query": args.query, "mode": args.mode, "limit": args.limit, "fetch_k": args.fetch_k}
         )
     else:
-        result = searcher.search(args.query, limit=args.limit, fetch_k=args.fetch_k).model_dump(
+        result = searcher.search(
+            args.query,
+            mode=args.mode,
+            limit=args.limit,
+            fetch_k=args.fetch_k,
+        ).model_dump(
             exclude_none=True
         )
 
@@ -92,15 +104,16 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    return print_human_readable(args.query, result, show_parent=args.show_parent)
+    return print_human_readable(args.query, result, mode=args.mode, show_parent=args.show_parent)
 
 
-def print_human_readable(query: str, result: dict[str, Any], *, show_parent: bool) -> int:
+def print_human_readable(query: str, result: dict[str, Any], *, mode: str, show_parent: bool) -> int:
     status = result.get("status", "unknown")
     print("=" * 72)
     print("TRPG Agent Search Smoke Test")
     print("=" * 72)
     print(f"query : {query}")
+    print(f"mode  : {mode}")
     print(f"status: {status}")
 
     if status == "error":

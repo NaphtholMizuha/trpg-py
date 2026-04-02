@@ -1,6 +1,7 @@
 from augury.planner.tools.grep import (
     GrepError,
     GrepInput,
+    GrepMatch,
     GrepResult,
     GrepTool,
     create_grep_tool,
@@ -43,6 +44,7 @@ from augury.planner.tools.search import (
     HybridRuleSearcher,
     OpenAIEmbedder,
     SearchInput,
+    SearchMode,
     SearchResult,
     SearchTool,
     build_default_searcher,
@@ -53,6 +55,7 @@ from augury.rag import Retriever, RetrievedDocument, build_default_retriever
 __all__ = [
     "GrepError",
     "GrepInput",
+    "GrepMatch",
     "GrepResult",
     "GrepTool",
     "ReadError",
@@ -71,6 +74,7 @@ __all__ = [
     "Retriever",
     "RetrievedDocument",
     "SearchInput",
+    "SearchMode",
     "SearchResult",
     "SearchTool",
     "create_grep_tool",

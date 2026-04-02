@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
@@ -11,8 +12,6 @@ from pydantic import BaseModel, Field, model_validator
 
 from augury.store import keys as list_state_keys
 from augury.store import read as read_state_path
-
-DEFAULT_GREP_LIMIT = 100
 
 _SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
     ("armor_class", "armor", "ac"),
@@ -38,9 +37,15 @@ class GrepError(BaseModel):
     message: str
 
 
+class GrepMatch(BaseModel):
+    key: str
+    value: Any
+    sim: float
+
+
 class GrepResult(BaseModel):
     status: Literal["ok", "no_match", "error"]
-    matches: list[str] = Field(default_factory=list)
+    matches: list[GrepMatch] = Field(default_factory=list)
     error: GrepError | None = None
 
 
@@ -49,11 +54,11 @@ class GrepInput(BaseModel):
         min_length=1,
         description="一个或多个布尔表达式字符串，例如 '(a && (b || c))'。",
     )
-    limit: int = Field(
-        default=DEFAULT_GREP_LIMIT,
+    limit: int | None = Field(
+        default=None,
         ge=1,
         le=1000,
-        description="最终返回的命中行数量上限。",
+        description="对排序后的结果做可选截断；为空时返回全部排序命中。",
     )
 
     @model_validator(mode="after")
@@ -68,15 +73,15 @@ class GrepInput(BaseModel):
 class GrepTool(BaseTool):
     name: str = "grep"
     description: str = (
-        "将当前状态展平成 `a.b.c = data` 文本行，并基于布尔表达式数组返回所有命中的内容行。"
-        "只读、无副作用，不写状态。"
+        "将当前状态展平成结构化命中，并基于布尔表达式数组返回按相关性排序的结果。"
+        "每条命中包含 key、value、sim；只读、无副作用，不写状态。"
     )
     args_schema: type[BaseModel] = GrepInput
 
     state: Any = Field(exclude=True)
     state_provider: Callable[[], Any] | None = Field(default=None, exclude=True)
 
-    def _run(self, expressions: list[str], limit: int = DEFAULT_GREP_LIMIT) -> dict[str, Any]:
+    def _run(self, expressions: list[str], limit: int | None = None) -> dict[str, Any]:
         normalized_input = GrepInput(expressions=expressions, limit=limit)
         _log_grep_input(normalized_input, tool_name=self.name)
         try:
@@ -104,16 +109,22 @@ def grep_lines(
     state: Any,
     *,
     expressions: list[str],
-    limit: int = DEFAULT_GREP_LIMIT,
-) -> list[str]:
+    limit: int | None = None,
+) -> list[GrepMatch]:
     normalized_input = GrepInput(expressions=expressions, limit=limit)
     predicates = [_compile_expression(expression) for expression in normalized_input.expressions]
-    matches: list[str] = []
-    for line in _flatten_state_lines(state):
-        if any(predicate(line) for predicate in predicates):
-            matches.append(line)
-            if len(matches) >= normalized_input.limit:
-                break
+    scored_matches: list[tuple[float, int, _FlattenedLine]] = []
+    for index, flattened in enumerate(_flatten_state_lines(state)):
+        if any(predicate(flattened.text) for predicate in predicates):
+            sim = _score_match(flattened, expressions=normalized_input.expressions)
+            scored_matches.append((sim, index, flattened))
+    scored_matches.sort(key=lambda item: (-item[0], item[1]))
+    if normalized_input.limit is not None:
+        scored_matches = scored_matches[: normalized_input.limit]
+    matches = [
+        GrepMatch(key=flattened.key, value=flattened.value, sim=round(sim, 4))
+        for sim, _, flattened in scored_matches
+    ]
     return matches
 
 
@@ -121,9 +132,9 @@ def grep_leaf_paths(
     state: Any,
     *,
     expressions: list[str],
-    limit: int = DEFAULT_GREP_LIMIT,
+    limit: int | None = None,
 ) -> list[str]:
-    return grep_lines(state, expressions=expressions, limit=limit)
+    return [item.key for item in grep_lines(state, expressions=expressions, limit=limit)]
 
 
 def create_grep_tool(
@@ -134,11 +145,18 @@ def create_grep_tool(
     return GrepTool(state={} if state is None else state, state_provider=state_provider)
 
 
-def _flatten_state_lines(state: Any) -> list[str]:
-    lines: list[str] = []
+@dataclass(frozen=True)
+class _FlattenedLine:
+    key: str
+    value: Any
+    text: str
+
+
+def _flatten_state_lines(state: Any) -> list[_FlattenedLine]:
+    lines: list[_FlattenedLine] = []
     for path in list_state_keys(state):
         value = read_state_path(state, path)
-        lines.append(f"{path} = {_format_value(value)}")
+        lines.append(_FlattenedLine(key=path, value=value, text=f"{path} = {_format_value(value)}"))
     return lines
 
 
@@ -159,6 +177,53 @@ def _compile_expression(expression: str) -> Callable[[str], bool]:
     if parser.has_remaining():
         raise ValueError(f"unexpected token {parser.peek()!r} in grep expression")
     return predicate
+
+
+def _score_match(flattened: _FlattenedLine, *, expressions: list[str]) -> float:
+    path_text = flattened.key.lower().replace("-", "_")
+    value_text = _format_value(flattened.value).lower().replace("-", "_")
+    path_tokens = set(_split_line_tokens(path_text))
+    value_tokens = set(_split_line_tokens(value_text))
+    best_score = 0.0
+    for expression in expressions:
+        terms = [_normalize_atom(token) for token in _tokenize_expression(expression) if token not in {"(", ")", "&&", "||"}]
+        if not terms:
+            continue
+        term_scores = [
+            _score_term(term, path_text=path_text, value_text=value_text, path_tokens=path_tokens, value_tokens=value_tokens)
+            for term in terms
+        ]
+        if not term_scores:
+            continue
+        best_score = max(best_score, sum(term_scores) / (len(term_scores) * 3.0))
+    return best_score
+
+
+def _score_term(
+    term: str,
+    *,
+    path_text: str,
+    value_text: str,
+    path_tokens: set[str],
+    value_tokens: set[str],
+) -> float:
+    best = 0.0
+    for variant in _expand_term_variants(term):
+        normalized_variant = variant.lower().replace("-", "_").replace(" ", "_")
+        parts = [part for part in normalized_variant.split("_") if part]
+        if normalized_variant in path_tokens:
+            best = max(best, 3.0)
+        elif normalized_variant in path_text:
+            best = max(best, 2.5)
+        elif normalized_variant in value_tokens:
+            best = max(best, 1.75)
+        elif normalized_variant in value_text and len(normalized_variant) >= 3:
+            best = max(best, 1.25)
+        elif parts and all(part in path_tokens for part in parts):
+            best = max(best, 2.0)
+        elif parts and all(part in path_tokens or part in value_tokens for part in parts):
+            best = max(best, 1.0)
+    return best
 
 
 def _tokenize_expression(expression: str) -> list[str]:
