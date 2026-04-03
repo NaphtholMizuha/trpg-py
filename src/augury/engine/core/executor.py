@@ -25,6 +25,7 @@ from augury.store.compat import has_path
 
 
 ALLOWED_FIELD_MAP_KEYS = {"id", "side", "alive", "tags", "position.x", "position.y"}
+ValidationIssue = dict[str, str | None]
 
 
 def validate_task_document(document: dict[str, Any]) -> TaskDocument:
@@ -44,36 +45,24 @@ def validate_task_document(document: dict[str, Any]) -> TaskDocument:
     steps: list[TaskStep] = []
     seen_ids: set[str] = set()
     prior_ids: set[str] = set()
-    for raw_step in document["steps"]:
-        if not isinstance(raw_step, dict):
-            raise ValidationError("Every step must be an object")
-        for required in ("id", "type", "kind", "args"):
-            if required not in raw_step:
-                raise ValidationError(f"Step is missing required field {required!r}")
-        step_id = raw_step["id"]
-        step_type = raw_step["type"]
-        kind = raw_step["kind"]
-        args = raw_step["args"]
-        tags = raw_step.get("tags", [])
-        when = raw_step.get("when")
-        if not isinstance(step_id, str):
-            raise ValidationError("Step id must be a string")
-        if step_id in seen_ids:
-            raise ValidationError(f"Duplicate step id {step_id!r}")
-        if step_type not in SUPPORTED_TYPES:
-            raise ValidationError(f"Unsupported step type {step_type!r}")
-        if kind not in SUPPORTED_KINDS[step_type]:
-            raise ValidationError(f"Unsupported kind {kind!r} for type {step_type!r}")
-        if not isinstance(args, dict):
-            raise ValidationError(f"Step {step_id!r} args must be an object")
-        if tags and not isinstance(tags, list):
-            raise ValidationError(f"Step {step_id!r} tags must be a list")
-        _validate_refs(step_id, args, prior_ids)
-        _validate_refs(step_id, when, prior_ids)
-        _validate_step_semantics(step_id, step_type, kind, args, tags)
+    issues: list[ValidationIssue] = []
+    for index, raw_step in enumerate(document["steps"]):
+        step_issues, validated_step = _validate_step_definition(
+            raw_step=raw_step,
+            index=index,
+            seen_ids=seen_ids,
+            prior_ids=prior_ids,
+        )
+        issues.extend(step_issues)
+        if validated_step is None:
+            continue
+        step_id = validated_step.id
         seen_ids.add(step_id)
         prior_ids.add(step_id)
-        steps.append(TaskStep(id=step_id, type=step_type, kind=kind, args=args, tags=list(tags), when=when))
+        steps.append(validated_step)
+
+    if issues:
+        raise _build_validation_error(issues)
 
     return TaskDocument(
         task_id=document["task_id"],
@@ -82,6 +71,73 @@ def validate_task_document(document: dict[str, Any]) -> TaskDocument:
         context=context,
         steps=steps,
     )
+
+
+def _validate_step_definition(
+    *,
+    raw_step: Any,
+    index: int,
+    seen_ids: set[str],
+    prior_ids: set[str],
+) -> tuple[list[ValidationIssue], TaskStep | None]:
+    issues: list[ValidationIssue] = []
+    step_path = f"steps.{index}"
+    if not isinstance(raw_step, dict):
+        issues.append(_issue(step_path, "Every step must be an object"))
+        return issues, None
+
+    missing_required = [required for required in ("id", "type", "kind", "args") if required not in raw_step]
+    for required in missing_required:
+        issues.append(_issue(f"{step_path}.{required}", f"Field required", code="missing"))
+    if missing_required:
+        return issues, None
+
+    step_id = raw_step["id"]
+    step_type = raw_step["type"]
+    kind = raw_step["kind"]
+    args = raw_step["args"]
+    tags = raw_step.get("tags", [])
+    when = raw_step.get("when")
+
+    if not isinstance(step_id, str):
+        issues.append(_issue(f"{step_path}.id", "Step id must be a string"))
+    if isinstance(step_id, str) and step_id in seen_ids:
+        issues.append(_issue(f"{step_path}.id", f"Duplicate step id {step_id!r}"))
+    if not isinstance(step_type, str):
+        issues.append(_issue(f"{step_path}.type", "Step type must be a string"))
+    elif step_type not in SUPPORTED_TYPES:
+        issues.append(_issue(f"{step_path}.type", f"Unsupported step type {step_type!r}"))
+    if not isinstance(kind, str):
+        issues.append(_issue(f"{step_path}.kind", "Step kind must be a string"))
+    elif isinstance(step_type, str) and step_type in SUPPORTED_TYPES and kind not in SUPPORTED_KINDS[step_type]:
+        issues.append(_issue(f"{step_path}.kind", f"Unsupported kind {kind!r} for type {step_type!r}"))
+    if not isinstance(args, dict):
+        issues.append(_issue(f"{step_path}.args", f"Step {step_id!r} args must be an object"))
+    if tags and not isinstance(tags, list):
+        issues.append(_issue(f"{step_path}.tags", f"Step {step_id!r} tags must be a list"))
+
+    if issues:
+        return issues, None
+
+    assert isinstance(step_id, str)
+    assert isinstance(step_type, str)
+    assert isinstance(kind, str)
+    assert isinstance(args, dict)
+    assert isinstance(tags, list)
+
+    _collect_validation_issue(issues, step_path, "args", lambda: _validate_refs(step_id, args, prior_ids))
+    _collect_validation_issue(issues, step_path, "when", lambda: _validate_refs(step_id, when, prior_ids))
+    _collect_validation_issue(
+        issues,
+        step_path,
+        "",
+        lambda: _validate_step_semantics(step_id, step_type, kind, args, tags),
+    )
+
+    if issues:
+        return issues, None
+
+    return issues, TaskStep(id=step_id, type=step_type, kind=kind, args=args, tags=list(tags), when=when)
 
 
 def execute_task(
@@ -246,10 +302,14 @@ def _validate_step_semantics(
             raise ValidationError(f"Area select step {step_id!r} must define shape and origin")
     if step_type == "effect":
         _validate_path_like_args(step_id, args, ("effects_path", "effects_path_template"))
-    if step_type == "resource" and "path" not in args:
-        raise ValidationError(f"Resource step {step_id!r} must define a path")
-    if step_type == "state" and "path" not in args:
-        raise ValidationError(f"State step {step_id!r} must define a path")
+    if step_type == "resource":
+        if "path" not in args:
+            raise ValidationError(f"Resource step {step_id!r} must define a path")
+        _validate_direct_state_path(step_id, "path", args.get("path"))
+    if step_type == "state":
+        if "path" not in args:
+            raise ValidationError(f"State step {step_id!r} must define a path")
+        _validate_direct_state_path(step_id, "path", args.get("path"))
 
 
 def _validate_field_map(step_id: str, args: dict[str, Any]) -> None:
@@ -290,7 +350,10 @@ def _validate_path_like_args(step_id: str, args: dict[str, Any], keys: tuple[str
             if not isinstance(value, str):
                 raise ValidationError(f"Step {step_id!r} {key!r} must be a string template")
             continue
-        if isinstance(value, (str, dict)):
+        if isinstance(value, str):
+            _validate_direct_state_path(step_id, key, value)
+            continue
+        if isinstance(value, dict):
             continue
         raise ValidationError(f"Step {step_id!r} {key!r} must be a string or object mapping")
 
@@ -302,3 +365,52 @@ def _validate_dice_spec(step_id: str, field_name: str, spec: Any) -> None:
         parse_dice_spec(spec)
     except DiceError as exc:
         raise ValidationError(f"Step {step_id!r} {field_name} has invalid dice spec {spec!r}") from exc
+
+
+def _validate_direct_state_path(step_id: str, field_name: str, value: Any) -> None:
+    if not isinstance(value, str):
+        raise ValidationError(f"Step {step_id!r} {field_name!r} must be a string path")
+    for prefix in ("state.", "context.", "result."):
+        if value.startswith(prefix):
+            raise ValidationError(
+                f"Step {step_id!r} {field_name!r} must use a raw state path without the {prefix[:-1]!r} namespace prefix"
+            )
+
+
+def _collect_validation_issue(
+    issues: list[ValidationIssue],
+    step_path: str,
+    default_suffix: str,
+    validator: Any,
+) -> None:
+    try:
+        validator()
+    except ValidationError as exc:
+        suffix, message, code = _extract_issue_details(exc, default_suffix=default_suffix)
+        path = step_path if not suffix else f"{step_path}.{suffix}"
+        issues.append(_issue(path, message, code=code))
+
+
+def _extract_issue_details(exc: ValidationError, *, default_suffix: str) -> tuple[str, str, str]:
+    if exc.issues:
+        first_issue = exc.issues[0]
+        raw_path = first_issue.get("path") or default_suffix
+        message = first_issue.get("message") or str(exc)
+        code = first_issue.get("code") or exc.__class__.__name__
+        return str(raw_path), str(message), str(code)
+    return default_suffix, str(exc), exc.__class__.__name__
+
+
+def _issue(path: str, message: str, *, code: str | None = None) -> ValidationIssue:
+    return {"path": path, "message": message, "code": code or "ValidationError"}
+
+
+def _build_validation_error(issues: list[ValidationIssue]) -> ValidationError:
+    summary = "; ".join(
+        f"{issue['path']}: {issue['message']}" if issue["path"] else str(issue["message"])
+        for issue in issues
+    )
+    return ValidationError(
+        f"Task document validation failed with {len(issues)} issue(s): {summary}",
+        issues=issues,
+    )

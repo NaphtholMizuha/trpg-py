@@ -1,0 +1,36 @@
+{
+  "instruction": "Aldera用迷雾步移动到(15,12)",
+  "normalized_instruction": "Aldera施放2环迷雾步并把自身位置更新到坐标(15,12)。",
+  "task": "消耗Aldera的2环法术位并更新其position.x与position.y到目标坐标。",
+  "reads": [
+    "actors.aldera.spell_slots.level_2.current",
+    "actors.aldera.position.x",
+    "actors.aldera.position.y"
+  ],
+  "judgments": [
+    "确认Aldera有可用的2环法术位。",
+    "迷雾步成功后将Aldera位置写为目标坐标(15,12)。",
+    "施法后扣减1点2环法术位。"
+  ],
+  "writes": [
+    "actors.aldera.position.x",
+    "actors.aldera.position.y",
+    "actors.aldera.spell_slots.level_2.current"
+  ],
+  "missing_info": [
+    "目标坐标(15,12)是否被地形阻挡或不可落点未在当前状态中显式给出。"
+  ],
+  "assumptions": [
+    "仅从状态角度处理位移写回，不在此阶段做地图碰撞推理。"
+  ],
+  "evidence": [
+    "actors.aldera.spell_slots.level_2.current = 3",
+    "actors.aldera.position = (5,10)",
+    "actors.aldera.spells.level_2包含迷雾步"
+  ],
+  "states": [
+    "actors.aldera.spell_slots.level_2.current = 3",
+    "actors.aldera.position.x = 5",
+    "actors.aldera.position.y = 10"
+  ]
+}

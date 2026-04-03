@@ -1,0 +1,36 @@
+{
+  "instruction": "Aldera对goblin_1施放圣火术",
+  "normalized_instruction": "Aldera施放戏法圣火术，要求goblin_1进行敏捷豁免，失败则受到光耀伤害。",
+  "task": "以Aldera法术DC为阈值对goblin_1进行敏捷豁免判定，失败时结算圣火术伤害并写回目标HP。",
+  "reads": [
+    "actors.aldera.spell_dc",
+    "actors.goblin_1.abilities.dex.save",
+    "actors.goblin_1.hp.current",
+    "actors.goblin_1.hp.max"
+  ],
+  "judgments": [
+    "圣火术不消耗法术位，直接进入豁免判定。",
+    "goblin_1进行敏捷豁免，对抗Aldera spell_dc。",
+    "豁免失败时结算圣火术伤害并扣减goblin_1 hp.current。",
+    "豁免成功时目标HP不变。"
+  ],
+  "writes": [
+    "actors.goblin_1.hp.current"
+  ],
+  "missing_info": [],
+  "assumptions": [
+    "伤害骰规格由规则文本决定并在执行阶段结算。"
+  ],
+  "evidence": [
+    "actors.aldera.spell_dc = 15",
+    "actors.goblin_1.abilities.dex.save = 2",
+    "actors.goblin_1.hp.current = 7/7",
+    "actors.aldera.spells.cantrips包含圣火术"
+  ],
+  "states": [
+    "actors.aldera.spell_dc = 15",
+    "actors.goblin_1.abilities.dex.save = 2",
+    "actors.goblin_1.hp.current = 7",
+    "actors.goblin_1.hp.max = 7"
+  ]
+}

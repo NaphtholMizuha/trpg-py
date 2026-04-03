@@ -1,0 +1,39 @@
+{
+  "instruction": "goblin_1用弯刀攻击Aldera",
+  "normalized_instruction": "goblin_1发起一次弯刀近战攻击，对Aldera进行命中判定并在命中时结算挥砍伤害。",
+  "task": "读取goblin_1弯刀命中加值与Aldera AC，完成攻击检定；命中后减少Aldera当前HP。",
+  "reads": [
+    "actors.goblin_1.attacks.scimitar.to_hit",
+    "actors.goblin_1.attacks.scimitar.damage.0.dice",
+    "actors.goblin_1.attacks.scimitar.damage.0.bonus",
+    "actors.aldera.ac.total",
+    "actors.aldera.hp.current",
+    "actors.aldera.hp.max"
+  ],
+  "judgments": [
+    "goblin_1进行攻击掷骰并加上弯刀to_hit与Aldera AC比较。",
+    "命中后按弯刀伤害组件对Aldera HP进行扣减。",
+    "伤害结算后HP不得小于0。"
+  ],
+  "writes": [
+    "actors.aldera.hp.current"
+  ],
+  "missing_info": [],
+  "assumptions": [
+    "本轮中goblin_1可执行近战攻击动作。"
+  ],
+  "evidence": [
+    "actors.goblin_1.attacks.scimitar.to_hit = 4",
+    "actors.goblin_1.attacks.scimitar.damage.0 = 1d6 + 2 slashing",
+    "actors.aldera.ac.total = 18",
+    "actors.aldera.hp.current = 30/44"
+  ],
+  "states": [
+    "actors.goblin_1.attacks.scimitar.to_hit = 4",
+    "actors.goblin_1.attacks.scimitar.damage.0.dice = 1d6",
+    "actors.goblin_1.attacks.scimitar.damage.0.bonus = 2",
+    "actors.aldera.ac.total = 18",
+    "actors.aldera.hp.current = 30",
+    "actors.aldera.hp.max = 44"
+  ]
+}

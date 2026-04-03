@@ -1,0 +1,34 @@
+{
+  "instruction": "Aldera用+1长剑攻击goblin_1",
+  "normalized_instruction": "Aldera执行一次近战武器攻击，使用主手+1长剑对goblin_1进行命中判定并在命中后结算挥砍伤害。",
+  "task": "读取Aldera攻击加值和goblin_1护甲等级，进行命中判定；若命中则对goblin_1当前HP结算武器伤害。",
+  "reads": [
+    "actors.aldera.equipment.main_hand.attack_bonus",
+    "actors.goblin_1.ac.total",
+    "actors.goblin_1.hp.current",
+    "actors.goblin_1.hp.max"
+  ],
+  "judgments": [
+    "使用1d20加Aldera主手武器攻击加值与goblin_1 AC比较判定命中。",
+    "命中后按长剑伤害表达式结算伤害并从goblin_1当前HP扣减。",
+    "未命中则不改变goblin_1 HP。"
+  ],
+  "writes": [
+    "actors.goblin_1.hp.current"
+  ],
+  "missing_info": [],
+  "assumptions": [
+    "Aldera与goblin_1处于近战可攻击距离。"
+  ],
+  "evidence": [
+    "actors.aldera.equipment.main_hand.attack_bonus = 7",
+    "actors.goblin_1.ac.total = 13",
+    "actors.goblin_1.hp.current = 7/7"
+  ],
+  "states": [
+    "actors.aldera.equipment.main_hand.attack_bonus = 7",
+    "actors.goblin_1.ac.total = 13",
+    "actors.goblin_1.hp.current = 7",
+    "actors.goblin_1.hp.max = 7"
+  ]
+}

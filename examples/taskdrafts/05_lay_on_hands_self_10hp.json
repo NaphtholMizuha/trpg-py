@@ -1,0 +1,32 @@
+{
+  "instruction": "Aldera使用圣疗为自己回复10点生命",
+  "normalized_instruction": "Aldera消耗圣疗池点数10点，对自己执行定值治疗并更新生命与资源余量。",
+  "task": "读取圣疗池余量与Aldera当前/最大HP，应用10点治疗并扣减对应资源。",
+  "reads": [
+    "actors.aldera.resources.lay_on_hands.current",
+    "actors.aldera.resources.lay_on_hands.max",
+    "actors.aldera.hp.current",
+    "actors.aldera.hp.max"
+  ],
+  "judgments": [
+    "先检查圣疗池当前值是否至少为10。",
+    "将Aldera hp.current增加10，但不超过hp.max。",
+    "将actors.aldera.resources.lay_on_hands.current扣减10。"
+  ],
+  "writes": [
+    "actors.aldera.hp.current",
+    "actors.aldera.resources.lay_on_hands.current"
+  ],
+  "missing_info": [],
+  "assumptions": [],
+  "evidence": [
+    "actors.aldera.resources.lay_on_hands.current = 25/25",
+    "actors.aldera.hp.current = 30/44"
+  ],
+  "states": [
+    "actors.aldera.resources.lay_on_hands.current = 25",
+    "actors.aldera.resources.lay_on_hands.max = 25",
+    "actors.aldera.hp.current = 30",
+    "actors.aldera.hp.max = 44"
+  ]
+}

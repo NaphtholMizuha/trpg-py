@@ -9,6 +9,10 @@ class ValidationError(ResolutionError):
 
     error_code = "validation_error"
 
+    def __init__(self, message: str, *, issues: list[dict[str, str | None]] | None = None) -> None:
+        super().__init__(message)
+        self.issues = issues or []
+
 
 class ExecutionError(ResolutionError):
     """Raised when a step fails during execution."""

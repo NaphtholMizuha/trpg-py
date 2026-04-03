@@ -6,6 +6,7 @@ from langchain_core.tools import BaseTool
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+from augury.planner.dsl_shape_catalog import build_expected_shape
 from augury.planner.task_document import validate_candidate_task_document
 from augury.errors import ValidationError
 
@@ -14,6 +15,7 @@ class LintIssue(BaseModel):
     path: str = ""
     message: str
     code: str | None = None
+    expected: dict[str, Any] | None = None
 
 
 class LintError(BaseModel):
@@ -65,8 +67,27 @@ def lint_task_document(task_document: dict[str, Any]) -> LintResult:
             )
             for error in exc.errors()
         ]
+        issues = _attach_expected_shapes(task_document, issues)
         return LintResult(status="invalid", summary=str(exc), issues=issues)
-    except (ValidationError, ValueError, TypeError) as exc:
+    except ValidationError as exc:
+        issues = [
+            LintIssue(
+                path=str(issue.get("path", "")),
+                message=str(issue.get("message", str(exc))),
+                code=str(issue.get("code")) if issue.get("code") is not None else None,
+                expected=_extract_issue_expected(issue),
+            )
+            for issue in getattr(exc, "issues", [])
+        ]
+        if not issues:
+            issues = [LintIssue(message=str(exc), code=exc.__class__.__name__)]
+        issues = _attach_expected_shapes(task_document, issues)
+        return LintResult(
+            status="invalid",
+            summary=str(exc),
+            issues=issues,
+        )
+    except (ValueError, TypeError) as exc:
         return LintResult(
             status="invalid",
             summary=str(exc),
@@ -89,6 +110,50 @@ def _format_error_path(location: tuple[Any, ...] | list[Any]) -> str:
         else:
             parts.append(str(item))
     return ".".join(parts)
+
+
+def _attach_expected_shapes(
+    task_document: dict[str, Any],
+    issues: list[LintIssue],
+) -> list[LintIssue]:
+    enriched: list[LintIssue] = []
+    for issue in issues:
+        if issue.expected is not None:
+            enriched.append(issue)
+            continue
+        expected = _infer_expected_shape(task_document, issue.path)
+        if expected is None:
+            enriched.append(issue)
+            continue
+        enriched.append(issue.model_copy(update={"expected": expected}))
+    return enriched
+
+
+def _infer_expected_shape(task_document: dict[str, Any], path: str) -> dict[str, Any] | None:
+    if not isinstance(path, str) or not path.startswith("steps."):
+        return None
+    parts = path.split(".")
+    if len(parts) < 2 or not parts[1].isdigit():
+        return None
+    steps = task_document.get("steps")
+    if not isinstance(steps, list):
+        return None
+    index = int(parts[1])
+    if index < 0 or index >= len(steps):
+        return None
+    raw_step = steps[index]
+    if not isinstance(raw_step, dict):
+        return None
+    step_type = raw_step.get("type")
+    step_kind = raw_step.get("kind")
+    if not isinstance(step_type, str) or not isinstance(step_kind, str):
+        return None
+    return build_expected_shape(step_type, step_kind)
+
+
+def _extract_issue_expected(issue: dict[str, Any]) -> dict[str, Any] | None:
+    expected = issue.get("expected")
+    return expected if isinstance(expected, dict) else None
 
 
 def _log_lint_input(*, task_document: dict[str, Any]) -> None:

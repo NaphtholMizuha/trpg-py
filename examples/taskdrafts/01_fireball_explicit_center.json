@@ -1,0 +1,164 @@
+{
+  "draft_contract_version": 2,
+  "task_shape": "area_spell.save_for_half.damage",
+  "instruction": "Aldera用3环火球术在goblin_1所在位置引爆",
+  "normalized_instruction": "Aldera以动作施放3环火球术，爆点为goblin_1当前位置(4,10)，对20尺半径内目标结算敏捷豁免与火焰伤害。",
+  "task": "以goblin_1当前位置为火球术爆点，选择20尺半径内受影响对象；对每个受影响对象进行敏捷豁免；失败承受8d6火焰伤害、成功承受减半伤害；最后扣除Aldera的1点3环法术位。",
+  "intent": {
+    "actor_id": "aldera",
+    "rule_name": "Fireball",
+    "action_kind": "cast_spell",
+    "spell_slot_level": 3,
+    "burst_center": {
+      "kind": "target_position",
+      "target_id": "goblin_1",
+      "position_path_x": "actors.goblin_1.position.x",
+      "position_path_y": "actors.goblin_1.position.y"
+    },
+    "area": {
+      "shape": "sphere",
+      "radius": 20
+    },
+    "resolution": {
+      "check_kind": "save",
+      "save_ability": "dexterity",
+      "dc_path": "actors.aldera.spell_dc",
+      "damage": [
+        {
+          "dice": "8d6",
+          "damage_type": "fire"
+        }
+      ],
+      "on_save": "half"
+    },
+    "resource_cost": {
+      "path": "actors.aldera.spell_slots.level_3.current",
+      "amount": 1
+    }
+  },
+  "bindings": {
+    "known_actor_ids": [
+      "aldera",
+      "goblin_1"
+    ],
+    "anchor_target_ids": [
+      "goblin_1"
+    ],
+    "explicit_write_paths": [
+      "actors.aldera.spell_slots.level_3.current",
+      "actors.goblin_1.hp.current"
+    ]
+  },
+  "reads": [
+    "actors.aldera.spell_slots.level_3.current",
+    "actors.aldera.spell_dc",
+    "actors.aldera.position.x",
+    "actors.aldera.position.y",
+    "actors.goblin_1.position.x",
+    "actors.goblin_1.position.y",
+    "actors.goblin_1.abilities.dex.save",
+    "actors.goblin_1.hp.current",
+    "actors.goblin_1.hp.max"
+  ],
+  "judgments": [
+    "select.area: 以goblin_1当前位置作为爆点，选择20尺半径球形范围内的受影响对象。",
+    "check.save: 每个受影响对象进行敏捷豁免，DC取actors.aldera.spell_dc。",
+    "damage.apply: 对豁免失败对象施加8d6 fire伤害，对豁免成功对象施加half伤害。",
+    "resource.consume: 从actors.aldera.spell_slots.level_3.current扣除1点。"
+  ],
+  "writes": [
+    "actors.aldera.spell_slots.level_3.current",
+    "actors.goblin_1.hp.current"
+  ],
+  "missing_info": [
+    "除goblin_1外，20尺范围内其他潜在生物的位置与身份未明确。"
+  ],
+  "gaps": [
+    {
+      "id": "unknown_additional_targets",
+      "kind": "target_set_incomplete",
+      "description": "当前只确认了goblin_1的位置，无法穷尽20尺范围内全部潜在目标。",
+      "blocking": false,
+      "default_handling": "允许以当前已知目标集合继续lowering，但必须保留目标集合可能不完整这一语义。"
+    }
+  ],
+  "assumptions": [
+    "goblin_1当前位置(4,10)合法可作为爆点。"
+  ],
+  "evidence": [
+    "actors.aldera.spell_slots.level_3.current = 2",
+    "actors.aldera.spell_dc = 15",
+    "actors.goblin_1.position = (4,10)",
+    "actors.goblin_1.abilities.dex.save = 2",
+    "actors.goblin_1.hp.current = 7/7"
+  ],
+  "states": [
+    "actors.aldera.spell_slots.level_3.current = 2",
+    "actors.aldera.spell_dc = 15",
+    "actors.aldera.position.x = 5",
+    "actors.aldera.position.y = 10",
+    "actors.goblin_1.position.x = 4",
+    "actors.goblin_1.position.y = 10",
+    "actors.goblin_1.abilities.dex.save = 2",
+    "actors.goblin_1.hp.current = 7",
+    "actors.goblin_1.hp.max = 7"
+  ],
+  "resolution_plan": [
+    {
+      "step_id": "select_area_targets",
+      "primitive": "select.area",
+      "inputs": [
+        "actors.goblin_1.position.x",
+        "actors.goblin_1.position.y"
+      ],
+      "outputs": [
+        "result.select_area_targets.target_ids"
+      ]
+    },
+    {
+      "step_id": "dexterity_save",
+      "primitive": "check.save",
+      "inputs": [
+        "actors.aldera.spell_dc",
+        "actors.goblin_1.abilities.dex.save"
+      ],
+      "outputs": [
+        "result.dexterity_save"
+      ]
+    },
+    {
+      "step_id": "apply_fireball_damage",
+      "primitive": "damage.apply",
+      "inputs": [
+        "result.select_area_targets.target_ids",
+        "result.dexterity_save"
+      ],
+      "outputs": [
+        "actors.goblin_1.hp.current"
+      ]
+    },
+    {
+      "step_id": "consume_level_3_slot",
+      "primitive": "resource.consume",
+      "inputs": [
+        "actors.aldera.spell_slots.level_3.current"
+      ],
+      "outputs": [
+        "actors.aldera.spell_slots.level_3.current"
+      ]
+    }
+  ],
+  "lowering_hints": {
+    "preferred_primitives": [
+      "select.area",
+      "check.save",
+      "damage.apply",
+      "resource.consume"
+    ],
+    "forbidden_patterns": [
+      "do not invent read/calculate/write/invoke steps",
+      "do not rewrite raw state paths with a state. prefix in direct path fields",
+      "do not put attack bonus or damage dice behind opaque reference strings when a canonical dice spec is already known"
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "instruction": "Aldera用火球术轰击敌人群",
+  "normalized_instruction": "Aldera施放火球术进行范围打击，但指令未给出明确爆点坐标和目标集合。",
+  "task": "在执行火球术结算前先确定爆点与覆盖对象集合，再对受影响对象进行敏捷豁免和伤害处理并扣除法术位。",
+  "reads": [
+    "actors.aldera.spell_slots.level_3.current",
+    "actors.aldera.spell_dc",
+    "actors.aldera.position.x",
+    "actors.aldera.position.y",
+    "actors.goblin_1.position.x",
+    "actors.goblin_1.position.y",
+    "actors.goblin_1.abilities.dex.save",
+    "actors.goblin_1.hp.current"
+  ],
+  "judgments": [
+    "火球术是20尺半径范围法术，必须先确定爆点与覆盖对象。",
+    "每个受影响对象都需要进行敏捷豁免，对抗Aldera spell_dc。",
+    "豁免失败承受全额火焰伤害，成功承受减半伤害。",
+    "完成结算后扣除Aldera 3环法术位。"
+  ],
+  "writes": [
+    "actors.aldera.spell_slots.level_3.current",
+    "actors.goblin_1.hp.current"
+  ],
+  "missing_info": [
+    "火球术爆点坐标未指定，无法唯一确定覆盖范围。",
+    "敌人群的具体成员及其位置未给出，无法确定完整目标集合。"
+  ],
+  "assumptions": [
+    "goblin_1是已知敌对单位，但不保证是唯一受影响目标。"
+  ],
+  "evidence": [
+    "actors.aldera.spell_slots.level_3.current = 2",
+    "actors.aldera.spell_dc = 15",
+    "actors.aldera.position = (5,10)",
+    "actors.goblin_1.position = (4,10)"
+  ],
+  "states": [
+    "actors.aldera.spell_slots.level_3.current = 2",
+    "actors.aldera.spell_dc = 15",
+    "actors.aldera.position.x = 5",
+    "actors.aldera.position.y = 10",
+    "actors.goblin_1.position.x = 4",
+    "actors.goblin_1.position.y = 10",
+    "actors.goblin_1.abilities.dex.save = 2",
+    "actors.goblin_1.hp.current = 7"
+  ]
+}

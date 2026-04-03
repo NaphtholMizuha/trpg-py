@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from augury.planner.nodes import DslNode, DslNodeDependencies, TaskNode, TaskNodeDependencies
 from augury.planner.task_document import PlannerWorkflowResult, TaskDraft
-from augury.planner.tools import create_grep_tool, create_lint_tool
+from augury.planner.tools import create_grep_tool, create_lint_tool, create_template_tool
 
 
 class PlannerGraphState(TypedDict, total=False):
@@ -45,6 +45,7 @@ class PlannerWorkflow:
         )
         self.dsl_node = self.dependencies.dsl_node or DslNode(
             DslNodeDependencies(
+                template_tool=create_template_tool(),
                 lint_tool=create_lint_tool(),
             )
         )

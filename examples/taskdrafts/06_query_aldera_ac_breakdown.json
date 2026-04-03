@@ -1,0 +1,27 @@
+{
+  "instruction": "查看Aldera当前AC和构成来源",
+  "normalized_instruction": "读取Aldera当前总AC及其breakdown细项，不进行任何状态写入。",
+  "task": "查询Aldera护甲等级总值和分项来源，用于战术判断。",
+  "reads": [
+    "actors.aldera.ac.total",
+    "actors.aldera.ac.breakdown"
+  ],
+  "judgments": [
+    "这是纯状态查询任务，只读取并返回AC信息。",
+    "不执行攻击、伤害、资源消耗或状态写入。"
+  ],
+  "writes": [],
+  "missing_info": [],
+  "assumptions": [],
+  "evidence": [
+    "actors.aldera.ac.total = 18",
+    "actors.aldera.ac.breakdown包含链甲、盾牌、防护戒指、防御风格来源"
+  ],
+  "states": [
+    "actors.aldera.ac.total = 18",
+    "actors.aldera.ac.breakdown[0].reason = 链甲",
+    "actors.aldera.ac.breakdown[1].reason = 盾牌",
+    "actors.aldera.ac.breakdown[2].reason = 防护戒指",
+    "actors.aldera.ac.breakdown[3].reason = 防御风格"
+  ]
+}

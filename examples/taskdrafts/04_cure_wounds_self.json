@@ -1,0 +1,36 @@
+{
+  "instruction": "Aldera施放回复术治疗自己",
+  "normalized_instruction": "Aldera施放1环回复术治疗自身，消耗1个1环法术位并恢复相应生命值。",
+  "task": "确认Aldera具备可用1环法术位，结算回复术治疗量并把Aldera当前HP提升到不超过最大HP。",
+  "reads": [
+    "actors.aldera.spell_slots.level_1.current",
+    "actors.aldera.abilities.cha.modifier",
+    "actors.aldera.hp.current",
+    "actors.aldera.hp.max"
+  ],
+  "judgments": [
+    "先校验Aldera至少有1个1环法术位可消耗。",
+    "回复术治疗量按法术骰与施法修正计算。",
+    "将治疗结果应用到Aldera hp.current，并限制不超过hp.max。",
+    "施法后从1环法术位扣减1点。"
+  ],
+  "writes": [
+    "actors.aldera.hp.current",
+    "actors.aldera.spell_slots.level_1.current"
+  ],
+  "missing_info": [],
+  "assumptions": [
+    "回复术使用1环施法，不进行升环。"
+  ],
+  "evidence": [
+    "actors.aldera.spell_slots.level_1.current = 4",
+    "actors.aldera.abilities.cha.modifier = 4",
+    "actors.aldera.hp.current = 30/44"
+  ],
+  "states": [
+    "actors.aldera.spell_slots.level_1.current = 4",
+    "actors.aldera.abilities.cha.modifier = 4",
+    "actors.aldera.hp.current = 30",
+    "actors.aldera.hp.max = 44"
+  ]
+}

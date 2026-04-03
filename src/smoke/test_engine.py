@@ -14,6 +14,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from augury import FixedDiceRoller, execute_task
+from smoke.execution_helpers import format_value, render_change_lines
 
 
 DEFAULT_EXAMPLE_NAME = "goblin_scimitar_attack"
@@ -393,14 +394,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def format_value(value: Any) -> str:
-    if isinstance(value, float):
-        return f"{value:.2f}".rstrip("0").rstrip(".")
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
-
-
 def format_roll_list(values: list[Any]) -> str:
     return "[" + ", ".join(format_value(value) for value in values) + "]"
 
@@ -547,14 +540,7 @@ def render_summary(example_name: str, report_payload: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Applied Changes:")
     changes = report.get("applied_changes", [])
-    if not changes:
-        lines.append("- (none)")
-    else:
-        for change in changes:
-            lines.append(
-                "- "
-                + f"{change['path']}: {format_value(change['old_value'])} -> {format_value(change['new_value'])}"
-            )
+    lines.extend(render_change_lines(changes))
 
     return "\n".join(lines)
 

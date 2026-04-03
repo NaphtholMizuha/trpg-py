@@ -1,0 +1,48 @@
+{
+  "instruction": "goblin_1用短弓射击Aldera",
+  "normalized_instruction": "goblin_1使用短弓发起远程攻击，对Aldera进行命中判定并在命中后结算穿刺伤害。",
+  "task": "读取短弓命中参数、射程和Aldera防御信息，完成命中判定并在命中时扣减Aldera HP。",
+  "reads": [
+    "actors.goblin_1.attacks.shortbow.to_hit",
+    "actors.goblin_1.attacks.shortbow.range",
+    "actors.goblin_1.attacks.shortbow.damage.0.dice",
+    "actors.goblin_1.attacks.shortbow.damage.0.bonus",
+    "actors.goblin_1.position.x",
+    "actors.goblin_1.position.y",
+    "actors.aldera.position.x",
+    "actors.aldera.position.y",
+    "actors.aldera.ac.total",
+    "actors.aldera.hp.current",
+    "actors.aldera.hp.max"
+  ],
+  "judgments": [
+    "根据双方位置判断攻击距离是否处于短弓可用射程。",
+    "使用短弓to_hit进行命中判定并与Aldera AC比较。",
+    "命中时结算短弓伤害并写回Aldera hp.current。",
+    "若超出有效射程或未命中则不修改Aldera HP。"
+  ],
+  "writes": [
+    "actors.aldera.hp.current"
+  ],
+  "missing_info": [],
+  "assumptions": [],
+  "evidence": [
+    "actors.goblin_1.attacks.shortbow.to_hit = 4",
+    "actors.goblin_1.attacks.shortbow.range = 80/320",
+    "actors.goblin_1.position = (4,10)",
+    "actors.aldera.position = (5,10)",
+    "actors.aldera.ac.total = 18",
+    "actors.aldera.hp.current = 30/44"
+  ],
+  "states": [
+    "actors.goblin_1.attacks.shortbow.to_hit = 4",
+    "actors.goblin_1.attacks.shortbow.range = 80/320",
+    "actors.goblin_1.position.x = 4",
+    "actors.goblin_1.position.y = 10",
+    "actors.aldera.position.x = 5",
+    "actors.aldera.position.y = 10",
+    "actors.aldera.ac.total = 18",
+    "actors.aldera.hp.current = 30",
+    "actors.aldera.hp.max = 44"
+  ]
+}

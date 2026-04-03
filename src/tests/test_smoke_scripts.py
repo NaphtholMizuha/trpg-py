@@ -9,8 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from loguru import logger
 from smoke import test_dsl, test_grep, test_linter, test_reads, test_search, test_task
 from augury.planner.task_document import TaskDraft
+from augury.planner.tools import create_lint_tool, create_template_tool
 
 
 class FakeSearcher:
@@ -122,10 +124,14 @@ def run_task_script(*args: str) -> tuple[str, dict[str, object]]:
     buffer = io.StringIO()
     payload: dict[str, object] = {}
 
-    def fake_run(self, instruction: str) -> TaskDraft:  # type: ignore[no-untyped-def]
-        return build_fake_task_draft(instruction=instruction)
+    class FakeTaskNode:
+        def run(self, instruction: str) -> TaskDraft:
+            return build_fake_task_draft(instruction=instruction)
 
-    with patch("smoke.test_task.TaskNode.run", new=fake_run):
+    def fake_build_task_node(*, state: object, config_path: object) -> FakeTaskNode:  # type: ignore[no-untyped-def]
+        return FakeTaskNode()
+
+    with patch("smoke.test_task.build_task_node", new=fake_build_task_node):
         with patch("sys.argv", ["test_task.py", *args]):
             with redirect_stdout(buffer):
                 raise_code = test_task.main()
@@ -161,20 +167,118 @@ def build_fake_lint_result() -> dict[str, object]:
         "status": "valid",
         "summary": "task document is executable",
         "issues": [],
+        "dsl_node_meta": {"lint_calls": 2, "max_tool_calls": 5, "used_fallback": False},
+    }
+
+
+def build_fake_invalid_lint_result() -> dict[str, object]:
+    return {
+        "status": "invalid",
+        "summary": "task document still has issues",
+        "issues": [
+            {
+                "path": "steps.0",
+                "message": "missing dice",
+                "expected": {
+                    "step_type": "check",
+                    "step_kind": "save",
+                    "required_args": ["dice", "ability"],
+                    "canonical_example": {
+                        "id": "dexterity_save",
+                        "type": "check",
+                        "kind": "save",
+                        "args": {
+                            "dice": "1d20",
+                            "ability": "dexterity",
+                            "dc_path": "actors.aldera.spell_dc",
+                        },
+                    },
+                },
+            }
+        ],
+        "dsl_node_meta": {"lint_calls": 1, "max_tool_calls": 5, "used_fallback": True},
+    }
+
+
+def build_fake_execution_result() -> dict[str, object]:
+    return {
+        "status": "success",
+        "reason": None,
+        "report": {
+            "task_id": "planner.resolve-fireball-vs-goblin",
+            "status": "success",
+            "step_reports": [],
+            "results": {},
+            "applied_changes": [
+                {
+                    "path": "actors.aldera.spell_slots.level_3.current",
+                    "old_value": 2,
+                    "new_value": 1,
+                    "mode": "set",
+                }
+            ],
+            "error": None,
+        },
+        "state_changes": [
+            {
+                "path": "actors.aldera.spell_slots.level_3.current",
+                "old_value": 2,
+                "new_value": 1,
+            }
+        ],
     }
 
 
 def run_dsl_script(*args: str) -> tuple[str, dict[str, object]]:
     buffer = io.StringIO()
     payload: dict[str, object] = {}
+    use_real_draft = "--draft-file" in args
 
     def fake_run(self, draft: TaskDraft) -> tuple[dict[str, object], dict[str, object]]:  # type: ignore[no-untyped-def]
         return build_fake_task_document(), build_fake_lint_result()
 
+    def fake_load_task_draft(path: str | Path) -> TaskDraft:  # type: ignore[no-untyped-def]
+        candidate = Path(path)
+        if use_real_draft and candidate.exists():
+            return TaskDraft.model_validate(json.loads(candidate.read_text(encoding="utf-8")))
+        return build_fake_task_draft(instruction="Aldera用火球术攻击goblin")
+
     with patch("smoke.test_dsl.DslNode.run", new=fake_run):
-        with patch("sys.argv", ["test_dsl.py", *args]):
-            with redirect_stdout(buffer):
-                raise_code = test_dsl.main()
+        with patch("smoke.test_dsl.load_task_draft", new=fake_load_task_draft):
+            with patch("smoke.test_dsl.resolve_state_file", return_value=Path("/tmp/world_state.toml")):
+                with patch("smoke.test_dsl.build_execution_result", return_value=build_fake_execution_result()):
+                    with patch("sys.argv", ["test_dsl.py", *args]):
+                        with redirect_stdout(buffer):
+                            raise_code = test_dsl.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"dsl smoke script returned unexpected code: {raise_code}")
+    if "--json" in args:
+        payload = json.loads(buffer.getvalue())
+    return buffer.getvalue(), payload
+
+
+def run_dsl_script_with_invalid_lint(*args: str) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    payload: dict[str, object] = {}
+    use_real_draft = "--draft-file" in args
+
+    def fake_run(self, draft: TaskDraft) -> tuple[dict[str, object], dict[str, object]]:  # type: ignore[no-untyped-def]
+        return build_fake_task_document(), build_fake_invalid_lint_result()
+
+    def fake_load_task_draft(path: str | Path) -> TaskDraft:  # type: ignore[no-untyped-def]
+        candidate = Path(path)
+        if use_real_draft and candidate.exists():
+            return TaskDraft.model_validate(json.loads(candidate.read_text(encoding="utf-8")))
+        return build_fake_task_draft(instruction="Aldera用火球术攻击goblin")
+
+    with patch("smoke.test_dsl.DslNode.run", new=fake_run):
+        with patch("smoke.test_dsl.load_task_draft", new=fake_load_task_draft):
+            with patch("smoke.test_dsl.resolve_state_file", return_value=Path("/tmp/world_state.toml")):
+                with patch("smoke.test_dsl.execute_generated_task") as execute_mock:
+                    with patch("sys.argv", ["test_dsl.py", *args]):
+                        with redirect_stdout(buffer):
+                            raise_code = test_dsl.main()
+                execute_mock.assert_not_called()
     if raise_code not in (None, 0):
         raise AssertionError(f"dsl smoke script returned unexpected code: {raise_code}")
     if "--json" in args:
@@ -334,12 +438,74 @@ class SmokeTaskScriptTests(unittest.TestCase):
 
 
 class SmokeDslScriptTests(unittest.TestCase):
+    def test_build_dsl_node_includes_template_and_lint_tools(self) -> None:
+        node = test_dsl.build_dsl_node(config_path=Path("config/config.toml"))
+
+        self.assertEqual(["template", "lint"], [tool.name for tool in node.tools])
+
+    def test_template_and_lint_tools_emit_observable_logs(self) -> None:
+        stderr = io.StringIO()
+        template_tool = create_template_tool()
+        lint_tool = create_lint_tool()
+        task_document = {
+            "task_id": "planner.tool-log-demo",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "record_state",
+                    "type": "state",
+                    "kind": "set",
+                    "args": {"path": "actors.aldera.ac", "value": 18},
+                }
+            ],
+        }
+
+        sink_id = logger.add(stderr, format="{message}")
+        try:
+            template_tool.invoke(
+                {
+                    "task_family": "area_spell",
+                    "resolution_mode": "save_damage",
+                    "resource_mode": "spell_slot",
+                    "targeting_mode": "center_on_target_position",
+                    "success_rule": "half",
+                }
+            )
+            template_tool.invoke(
+                {
+                    "task_family": "area spell or area effect",
+                    "resolution_mode": "save_damage",
+                    "resource_mode": "spell_slot",
+                    "targeting_mode": "center_on_target_position",
+                    "success_rule": "half",
+                }
+            )
+            lint_tool.invoke({"task_document": task_document})
+        finally:
+            logger.remove(sink_id)
+
+        output = stderr.getvalue()
+
+        self.assertIn("tool_input tool=template", output)
+        self.assertIn("tool_output tool=template", output)
+        self.assertIn("status=error", output)
+        self.assertIn("invalid_fields=['task_family']", output)
+        self.assertIn("tool_input tool=lint", output)
+        self.assertIn("tool_output tool=lint", output)
+
     def test_dsl_smoke_script_supports_json_output(self) -> None:
         _, payload = run_dsl_script("--json")
 
         self.assertEqual("Aldera用火球术攻击goblin", payload["draft"]["instruction"])
         self.assertEqual("planner.resolve-fireball-vs-goblin", payload["task_document"]["task_id"])
         self.assertEqual("valid", payload["lint_result"]["status"])
+        self.assertEqual("success", payload["execution_result"]["status"])
+        self.assertEqual("/tmp/world_state.toml", payload["state_file"])
+        self.assertEqual("actors.aldera.spell_slots.level_3.current", payload["state_changes"][0]["path"])
+        self.assertEqual(2, payload["lint_result"]["dsl_node_meta"]["lint_calls"])
+        self.assertFalse(payload["lint_result"]["dsl_node_meta"]["used_fallback"])
         self.assertIn("steps", payload["task_document"])
 
     def test_dsl_smoke_script_prints_human_summary(self) -> None:
@@ -349,8 +515,14 @@ class SmokeDslScriptTests(unittest.TestCase):
         self.assertIn("instruction : Aldera用火球术攻击goblin", output)
         self.assertIn("task_id     : planner.resolve-fireball-vs-goblin", output)
         self.assertIn("lint_status : valid", output)
+        self.assertIn("lint_calls  : 2", output)
+        self.assertIn("used_fallback: no", output)
+        self.assertIn("execution_status : success", output)
+        self.assertIn("state_changes:", output)
+        self.assertIn("actors.aldera.spell_slots.level_3.current: 2 -> 1", output)
         self.assertIn("task_document:", output)
         self.assertIn("lint_result:", output)
+        self.assertIn("execution_result:", output)
 
     def test_dsl_smoke_script_supports_custom_draft_file(self) -> None:
         custom_draft = build_fake_task_draft(instruction="Malik用长剑攻击Aldera")
@@ -365,3 +537,15 @@ class SmokeDslScriptTests(unittest.TestCase):
 
         self.assertEqual("Malik用长剑攻击Aldera", payload["draft"]["instruction"])
         self.assertEqual("planner.resolve-fireball-vs-goblin", payload["task_document"]["task_id"])
+
+    def test_dsl_smoke_script_skips_execution_when_lint_is_invalid(self) -> None:
+        output, payload = run_dsl_script_with_invalid_lint("--json")
+
+        self.assertEqual("invalid", payload["lint_result"]["status"])
+        self.assertEqual("skipped", payload["execution_result"]["status"])
+        self.assertEqual("lint_invalid", payload["execution_result"]["reason"])
+        self.assertEqual([], payload["state_changes"])
+        self.assertEqual("save", payload["lint_result"]["issues"][0]["expected"]["step_kind"])
+        self.assertEqual("1d20", payload["lint_result"]["issues"][0]["expected"]["canonical_example"]["args"]["dice"])
+        self.assertTrue(payload["lint_result"]["dsl_node_meta"]["used_fallback"])
+        self.assertIn('"status": "skipped"', output)

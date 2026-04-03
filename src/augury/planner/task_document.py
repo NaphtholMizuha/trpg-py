@@ -3,18 +3,28 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
+from augury.engine.combat.operations import SUPPORTED_KINDS, SUPPORTED_TYPES
 from augury.engine.core.executor import validate_task_document
 
 
 class TaskStepSchema(BaseModel):
     id: str
-    type: str
+    type: Literal["select", "check", "damage", "heal", "resource", "effect", "state"]
     kind: str
     args: dict[str, Any]
-    tags: list[Any] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     when: Any = None
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str, info: ValidationInfo) -> str:
+        step_type = info.data.get("type")
+        if step_type in SUPPORTED_TYPES and value not in SUPPORTED_KINDS[step_type]:
+            allowed = ", ".join(sorted(SUPPORTED_KINDS[step_type]))
+            raise ValueError(f"kind must be one of [{allowed}] when type={step_type!r}")
+        return value
 
 
 class TaskDocumentSchema(BaseModel):

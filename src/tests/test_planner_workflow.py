@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -9,8 +10,8 @@ sys.path.insert(0, "src")
 
 from augury.planner import PlannerWorkflow, PlannerWorkflowDependencies
 from augury.planner.nodes import DslNode, DslNodeDependencies, TaskNode, TaskNodeDependencies
-from augury.planner.task_document import TaskDraft
-from augury.planner.tools import create_grep_tool, create_lint_tool
+from augury.planner.task_document import TaskDocumentSchema, TaskDraft
+from augury.planner.tools import create_grep_tool, create_lint_tool, create_template_tool
 from tests.config_helpers import write_project_config
 
 
@@ -19,10 +20,12 @@ class FakeAgent:
         self.payload = payload
         self.call_log = call_log
         self.marker = marker
+        self.invoke_configs: list[object] = []
 
-    def invoke(self, state: dict[str, object]) -> dict[str, object]:
+    def invoke(self, state: dict[str, object], config: object | None = None) -> dict[str, object]:
         self.call_log.append(self.marker)
         self.call_log.append(state["messages"][0]["content"])  # type: ignore[index]
+        self.invoke_configs.append(config)
         return {"structured_response": self.payload}
 
 
@@ -38,7 +41,188 @@ class RecordingAgentFactory:
         return FakeAgent(self.payload, self.call_log, self.marker)
 
 
+class SequenceAgent:
+    def __init__(self, responses: list[dict[str, object]], call_log: list[str], marker: str) -> None:
+        self.responses = responses
+        self.call_log = call_log
+        self.marker = marker
+        self.invocations = 0
+        self.invoke_configs: list[object] = []
+
+    def invoke(self, state: dict[str, object], config: object | None = None) -> dict[str, object]:
+        self.call_log.append(self.marker)
+        self.call_log.append(state["messages"][0]["content"])  # type: ignore[index]
+        self.invoke_configs.append(config)
+        index = min(self.invocations, len(self.responses) - 1)
+        self.invocations += 1
+        return self.responses[index]
+
+
+class SequenceAgentFactory:
+    def __init__(self, responses: list[dict[str, object]], marker: str, call_log: list[str]) -> None:
+        self.responses = responses
+        self.marker = marker
+        self.call_log = call_log
+        self.calls: list[dict[str, object]] = []
+        self.agent: SequenceAgent | None = None
+
+    def __call__(self, **kwargs: object) -> SequenceAgent:
+        self.calls.append(kwargs)
+        self.agent = SequenceAgent(self.responses, self.call_log, self.marker)
+        return self.agent
+
+
+class FakeLintTool:
+    name = "lint"
+
+    def __init__(self, results: list[dict[str, object]]) -> None:
+        self.results = results
+        self.calls: list[dict[str, object]] = []
+
+    def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(payload)
+        index = min(len(self.calls) - 1, len(self.results) - 1)
+        return dict(self.results[index])
+
+
+class FakeTemplateTool:
+    name = "template"
+
+    def __init__(self, result: dict[str, object]) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(payload)
+        return dict(self.result)
+
+
+class ToolCallingAgent:
+    def __init__(
+        self,
+        payload: dict[str, object],
+        tools: list[object],
+        call_log: list[str],
+        marker: str,
+    ) -> None:
+        self.payload = payload
+        self.call_log = call_log
+        self.marker = marker
+        self.tools = {getattr(tool, "name", f"tool_{index}"): tool for index, tool in enumerate(tools)}
+        self.invoke_configs: list[object] = []
+
+    def invoke(self, state: dict[str, object], config: object | None = None) -> dict[str, object]:
+        self.call_log.append(self.marker)
+        self.call_log.append(state["messages"][0]["content"])  # type: ignore[index]
+        self.invoke_configs.append(config)
+        template_result = self.tools["template"].invoke(
+            {
+                "task_family": "area spell or area effect",
+                "resolution_mode": "save_damage",
+                "resource_mode": "spell_slot",
+                "targeting_mode": "center_on_target_position",
+                "success_rule": "half",
+            }
+        )
+        lint_result = self.tools["lint"].invoke({"task_document": self.payload})
+        return {
+            "structured_response": self.payload,
+            "messages": [
+                {"name": "template", "content": json.dumps(template_result, ensure_ascii=False)},
+                {"name": "lint", "content": json.dumps(lint_result, ensure_ascii=False)},
+            ],
+        }
+
+
+class ToolCallingAgentFactory:
+    def __init__(self, payload: dict[str, object], marker: str, call_log: list[str]) -> None:
+        self.payload = payload
+        self.marker = marker
+        self.call_log = call_log
+        self.calls: list[dict[str, object]] = []
+        self.agent: ToolCallingAgent | None = None
+
+    def __call__(self, **kwargs: object) -> ToolCallingAgent:
+        self.calls.append(kwargs)
+        tools = kwargs.get("tools")
+        self.agent = ToolCallingAgent(
+            self.payload,
+            list(tools) if isinstance(tools, list) else [],
+            self.call_log,
+            self.marker,
+        )
+        return self.agent
+
+
 class PlannerWorkflowTests(unittest.TestCase):
+    def test_dsl_node_prompt_files_define_engine_dsl_vocabulary_and_forbidden_terms(self) -> None:
+        system_prompt = Path("config/prompts/planner_dsl_node_system.txt").read_text(encoding="utf-8")
+        user_prompt = Path("config/prompts/planner_dsl_node_user.txt").read_text(encoding="utf-8")
+
+        self.assertIn("select.target", system_prompt)
+        self.assertIn("check.save", system_prompt)
+        self.assertIn("resource.consume", system_prompt)
+        self.assertIn("The internal `template` tool is available", system_prompt)
+        self.assertIn("Prefer using `template` before relying on memory", system_prompt)
+        self.assertIn("explicitly call `template` yourself", system_prompt)
+        self.assertIn("Exact `template` enum literals", system_prompt)
+        self.assertIn("Never send undocumented near-synonyms such as `area_spell`.", system_prompt)
+        self.assertNotIn("prefetched `template_query_hint`", system_prompt)
+        self.assertIn("The internal `lint` tool is available as the submission check", system_prompt)
+        self.assertIn("Before you finalize the TaskDocument, use `lint` to check", system_prompt)
+        self.assertIn("Your default goal is to return a TaskDocument that is `lint` valid", system_prompt)
+        self.assertIn("If `lint` returns `invalid`, do not treat that invalid candidate as an acceptable final answer.", system_prompt)
+        self.assertIn("continue revising and checking again until `lint` returns `valid`", system_prompt)
+        self.assertIn("When `lint` returns structured issues with an `expected` template", system_prompt)
+        self.assertIn("Do not invent project-external step types", system_prompt)
+        self.assertIn("read`, `calculate`, `invoke`, `conditional`, or `write", system_prompt)
+        self.assertIn("Build a valid TaskDocument in the current engine DSL.", user_prompt)
+        self.assertIn("The final goal is to return a TaskDocument that is lint valid", user_prompt)
+        self.assertIn('"task_draft": {{task_draft_json}}', user_prompt)
+        self.assertNotIn("template_query_hint", user_prompt)
+        self.assertNotIn("template_lookup", user_prompt)
+        self.assertIn("call `template` with controlled enum fields", user_prompt)
+        self.assertIn("use `unknown` instead of inventing a narrower signature", user_prompt)
+        self.assertIn("Use exact template enum literals", user_prompt)
+        self.assertIn("area spell or area effect", user_prompt)
+        self.assertIn("Never send undocumented near-synonyms such as `area_spell`", user_prompt)
+        self.assertIn("Before finalizing the TaskDocument, use `lint` to check", user_prompt)
+        self.assertIn("If `lint` returns invalid, that candidate is not the ideal final answer.", user_prompt)
+        self.assertIn("continue revising and checking again until `lint` returns valid", user_prompt)
+        self.assertIn("If `lint` returns issues with an `expected` template", user_prompt)
+        self.assertNotIn("repair_mode", user_prompt)
+        self.assertNotIn("lint_budget", user_prompt)
+        self.assertIn("Do not generate any step type outside select/check/damage/heal/resource/effect/state.", user_prompt)
+        self.assertIn("translation_rules", user_prompt)
+
+    def test_dsl_node_prompt_files_include_lowering_few_shots(self) -> None:
+        user_prompt = Path("config/prompts/planner_dsl_node_user.txt").read_text(encoding="utf-8")
+
+        self.assertIn("single-target attack", user_prompt)
+        self.assertIn("area spell or area effect", user_prompt)
+        self.assertIn("direct state update", user_prompt)
+        self.assertIn('"type": "damage"', user_prompt)
+        self.assertIn('"kind": "apply"', user_prompt)
+        self.assertIn('"type": "resource"', user_prompt)
+        self.assertIn('"kind": "consume"', user_prompt)
+
+    def test_task_document_schema_rejects_project_external_step_types(self) -> None:
+        with self.assertRaises(Exception):
+            TaskDocumentSchema.model_validate(
+                {
+                    "task_id": "bad_dsl",
+                    "version": 1,
+                    "steps": [
+                        {
+                            "id": "step1",
+                            "type": "read",
+                            "kind": "ReadProperties",
+                            "args": {"keys": ["actors.aldera.ac"]},
+                        }
+                    ],
+                }
+            )
+
     def test_task_node_prompt_files_define_judgment_first_order(self) -> None:
         system_prompt = Path("config/prompts/planner_task_node_system.txt").read_text(encoding="utf-8")
         user_prompt = Path("config/prompts/planner_task_node_user.txt").read_text(encoding="utf-8")
@@ -332,6 +516,515 @@ class PlannerWorkflowTests(unittest.TestCase):
         self.assertIn('"instruction": "Track Malik HP"', call_log[3])
         self.assertEqual("planner.track-malik-hp", dsl_result["task_id"])
         self.assertEqual("valid", lint_result["status"])
+
+    def test_dsl_node_uses_single_invoke_and_fallback_lint(self) -> None:
+        call_log: list[str] = []
+        draft = TaskDraft(
+            instruction="Aldera用火球术攻击goblin",
+            normalized_instruction="Aldera用火球术攻击goblin",
+            task="Resolve Fireball against goblin_1.",
+            reads=["actors.aldera.spell_dc", "actors.goblin_1.abilities.dex.save"],
+            judgments=["goblin_1 makes a Dexterity saving throw against Aldera's spell DC."],
+            writes=["actors.goblin_1.hp.current"],
+            assumptions=[],
+            missing_info=[],
+            evidence=["火球术：敏捷豁免，失败全伤，成功半伤"],
+            states=["actors.goblin_1.abilities.dex.save = 2"],
+        )
+        valid_document = {
+            "task_id": "planner.fireball-save",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "dex_save",
+                    "type": "check",
+                    "kind": "save",
+                    "args": {"dice": "1d20", "dc": 15},
+                }
+            ],
+        }
+        lint_tool = FakeLintTool(
+            [
+                {
+                    "status": "valid",
+                    "summary": "TaskDocument is valid.",
+                    "issues": [],
+                },
+            ]
+        )
+        dsl_factory = SequenceAgentFactory(
+            [{"structured_response": valid_document}],
+            "dsl",
+            call_log,
+        )
+        node = DslNode(
+            DslNodeDependencies(
+                lint_tool=lint_tool,
+                agent_factory=dsl_factory,
+                model="openai:test-planner",
+                system_prompt="DSL system prompt override",
+                user_prompt_template='{"task_draft":{{task_draft_json}}}',
+            )
+        )
+
+        document, lint_result = node.run(draft)
+
+        self.assertEqual("planner.fireball-save", document["task_id"])
+        self.assertEqual("valid", lint_result["status"])
+        self.assertEqual(1, len(lint_tool.calls))
+        self.assertEqual(1, len(dsl_factory.calls))
+        self.assertEqual(1, dsl_factory.agent.invocations)
+        self.assertEqual({"recursion_limit": 13}, dsl_factory.agent.invoke_configs[0])
+        self.assertIn('"task_draft":', call_log[1])
+        self.assertEqual(1, lint_result["dsl_node_meta"]["lint_calls"])
+        self.assertEqual(5, lint_result["dsl_node_meta"]["max_tool_calls"])
+        self.assertTrue(lint_result["dsl_node_meta"]["used_fallback"])
+
+    def test_dsl_node_uses_agent_emitted_lint_tool_result_without_fallback_invoke(self) -> None:
+        call_log: list[str] = []
+        draft = TaskDraft(
+            instruction="Track Aldera AC",
+            normalized_instruction="Track Aldera AC",
+            task="Read Aldera AC and carry it into tracked state.",
+            reads=["actors.aldera.ac"],
+            judgments=["Use Aldera AC as the defensive threshold."],
+            writes=["actors.aldera.ac"],
+            assumptions=[],
+            missing_info=[],
+            evidence=[],
+            states=[],
+        )
+        valid_document = {
+            "task_id": "planner.track-aldera-ac",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "record_aldera_ac",
+                    "type": "state",
+                    "kind": "set",
+                    "args": {"path": "actors.aldera.ac", "value": 18},
+                }
+            ],
+        }
+        lint_tool = FakeLintTool([{"status": "valid", "summary": "unused fallback", "issues": []}])
+        dsl_factory = SequenceAgentFactory(
+            [
+                {
+                    "structured_response": valid_document,
+                    "messages": [
+                        {
+                            "name": "lint",
+                            "content": json.dumps(
+                                {"status": "valid", "summary": "TaskDocument is valid.", "issues": []},
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ],
+                }
+            ],
+            "dsl",
+            call_log,
+        )
+        node = DslNode(
+            DslNodeDependencies(
+                lint_tool=lint_tool,
+                agent_factory=dsl_factory,
+                model="openai:test-planner",
+                system_prompt="DSL system prompt override",
+                user_prompt_template='{"task_draft":{{task_draft_json}}}',
+            )
+        )
+
+        document, lint_result = node.run(draft)
+
+        self.assertEqual("planner.track-aldera-ac", document["task_id"])
+        self.assertEqual("valid", lint_result["status"])
+        self.assertEqual([], lint_tool.calls)
+        self.assertEqual(1, lint_result["dsl_node_meta"]["lint_calls"])
+        self.assertFalse(lint_result["dsl_node_meta"]["used_fallback"])
+
+    def test_dsl_node_records_fallback_lint_usage_when_agent_emits_no_lint_result(self) -> None:
+        call_log: list[str] = []
+        draft = TaskDraft(
+            instruction="Track Aldera AC",
+            normalized_instruction="Track Aldera AC",
+            task="Read Aldera AC and carry it into tracked state.",
+            reads=["actors.aldera.ac"],
+            judgments=["Use Aldera AC as the defensive threshold."],
+            writes=["actors.aldera.ac"],
+            assumptions=[],
+            missing_info=[],
+            evidence=[],
+            states=[],
+        )
+        valid_document = {
+            "task_id": "planner.track-aldera-ac",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "record_aldera_ac",
+                    "type": "state",
+                    "kind": "set",
+                    "args": {"path": "actors.aldera.ac", "value": 18},
+                }
+            ],
+        }
+        lint_tool = FakeLintTool([{"status": "valid", "summary": "fallback valid", "issues": []}])
+        dsl_factory = SequenceAgentFactory(
+            [{"structured_response": valid_document, "messages": []}],
+            "dsl",
+            call_log,
+        )
+        node = DslNode(
+            DslNodeDependencies(
+                lint_tool=lint_tool,
+                agent_factory=dsl_factory,
+                model="openai:test-planner",
+                system_prompt="DSL system prompt override",
+                user_prompt_template='{"task_draft":{{task_draft_json}}}',
+            )
+        )
+
+        _, lint_result = node.run(draft)
+
+        self.assertEqual(1, len(lint_tool.calls))
+        self.assertEqual(1, lint_result["dsl_node_meta"]["lint_calls"])
+        self.assertTrue(lint_result["dsl_node_meta"]["used_fallback"])
+        self.assertEqual(5, lint_result["dsl_node_meta"]["max_tool_calls"])
+
+    def test_dsl_node_prompt_can_reference_template_guidance_from_lint(self) -> None:
+        user_prompt = Path("config/prompts/planner_dsl_node_user.txt").read_text(encoding="utf-8")
+
+        self.assertIn("required fields", user_prompt)
+        self.assertIn("allowed fields", user_prompt)
+        self.assertIn("canonical example", user_prompt)
+        self.assertIn("save_ability", user_prompt)
+        self.assertIn("conditional_halving_on_save", user_prompt)
+        self.assertIn("Use the returned issues and expected templates to improve the candidate", user_prompt)
+
+    def test_template_tool_returns_area_spell_template_with_unknown_fallback(self) -> None:
+        tool = create_template_tool()
+
+        exact = tool.invoke(
+            {
+                "task_family": "area spell or area effect",
+                "resolution_mode": "save_damage",
+                "resource_mode": "spell_slot",
+                "targeting_mode": "center_on_target_position",
+                "success_rule": "half",
+            }
+        )
+        fallback = tool.invoke(
+            {
+                "task_family": "area spell or area effect",
+                "resolution_mode": "save_damage",
+                "resource_mode": "unknown",
+                "targeting_mode": "unknown",
+                "success_rule": "unknown",
+            }
+        )
+
+        self.assertEqual("ok", exact["status"])
+        self.assertEqual("area-spell.save-damage-half.spell-slot", exact["template_id"])
+        self.assertEqual(["select.area", "check.save", "damage.apply", "resource.consume"], exact["step_order"])
+        self.assertEqual("ok", fallback["status"])
+        self.assertTrue(fallback["fallback_used"])
+        self.assertEqual("area-spell.save-damage-half.spell-slot", fallback["template_id"])
+        self.assertIn("required_bindings", fallback)
+
+    def test_template_tool_rejects_invalid_enum_input_with_structured_error(self) -> None:
+        tool = create_template_tool()
+
+        invalid = tool.invoke(
+            {
+                "task_family": "area_spell",
+                "resolution_mode": "save_damage",
+                "resource_mode": "spell_slot",
+                "targeting_mode": "center_on_target_position",
+                "success_rule": "half",
+            }
+        )
+
+        self.assertEqual("error", invalid["status"])
+        self.assertEqual("invalid_enum", invalid["error_type"])
+        self.assertEqual("task_family", invalid["invalid_fields"][0]["field"])
+        self.assertEqual("area_spell", invalid["invalid_fields"][0]["value"])
+        self.assertIn("area spell or area effect", invalid["invalid_fields"][0]["allowed_values"])
+
+    def test_template_tool_supports_area_spell_and_single_target_attack_documents_that_lint(self) -> None:
+        template_tool = create_template_tool()
+        lint_tool = create_lint_tool()
+
+        area_template = template_tool.invoke(
+            {
+                "task_family": "area spell or area effect",
+                "resolution_mode": "save_damage",
+                "resource_mode": "spell_slot",
+                "targeting_mode": "center_on_target_position",
+                "success_rule": "half",
+            }
+        )
+        attack_template = template_tool.invoke(
+            {
+                "task_family": "single-target attack",
+                "resolution_mode": "attack_damage",
+                "resource_mode": "none",
+                "targeting_mode": "direct_target",
+                "success_rule": "none",
+            }
+        )
+
+        area_document = {
+            "task_id": "planner.fireball-template-demo",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "select_area_targets",
+                    "type": "select",
+                    "kind": "area",
+                    "args": {
+                        "shape": "sphere",
+                        "radius": 20,
+                        "origin": {
+                            "x": {"$ref": "state.actors.goblin_1.position.x"},
+                            "y": {"$ref": "state.actors.goblin_1.position.y"},
+                        },
+                    },
+                },
+                {
+                    "id": "saving_throw",
+                    "type": "check",
+                    "kind": "save",
+                    "args": {
+                        "dice": "1d20",
+                        "ability": "dexterity",
+                        "dc_path": "actors.aldera.spell_dc",
+                        "targets": {"$ref": "result.select_area_targets.target_ids"},
+                    },
+                },
+                {
+                    "id": "apply_damage",
+                    "type": "damage",
+                    "kind": "apply",
+                    "args": {
+                        "targets": {"$ref": "result.select_area_targets.target_ids"},
+                        "damage": [{"dice": "8d6", "damage_type": "fire"}],
+                        "save_result": {"$ref": "result.saving_throw"},
+                        "on_save": "half",
+                    },
+                },
+                {
+                    "id": "consume_resource",
+                    "type": "resource",
+                    "kind": "consume",
+                    "args": {
+                        "path": "actors.aldera.spell_slots.level_3.current",
+                        "cost": 1,
+                    },
+                },
+            ],
+        }
+        attack_document = {
+            "task_id": "planner.attack-template-demo",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "attack_roll",
+                    "type": "check",
+                    "kind": "attack",
+                    "args": {
+                        "dice": "1d20",
+                        "modifier": 5,
+                        "target_id": "goblin_1",
+                        "target_ac_path": "actors.goblin_1.ac.total",
+                    },
+                },
+                {
+                    "id": "apply_damage",
+                    "type": "damage",
+                    "kind": "apply",
+                    "args": {
+                        "targets": ["goblin_1"],
+                        "damage": [{"dice": "1d8", "bonus": 3, "damage_type": "slashing"}],
+                    },
+                },
+            ],
+        }
+
+        area_lint = lint_tool.invoke({"task_document": area_document})
+        attack_lint = lint_tool.invoke({"task_document": attack_document})
+
+        self.assertEqual("area-spell.save-damage-half.spell-slot", area_template["template_id"])
+        self.assertEqual("single-target-attack.attack-damage", attack_template["template_id"])
+        self.assertEqual("valid", area_lint["status"])
+        self.assertEqual("valid", attack_lint["status"])
+
+    def test_default_workflow_dsl_node_includes_template_and_lint_tools(self) -> None:
+        workflow = PlannerWorkflow(state={"actors": {"aldera": {"ac": 18}}})
+
+        self.assertEqual(["template", "lint"], [tool.name for tool in workflow.dsl_node.tools])
+
+    def test_dsl_node_does_not_prefetch_template_when_agent_never_calls_it(self) -> None:
+        call_log: list[str] = []
+        draft = TaskDraft(
+            instruction="Aldera用火球术攻击goblin_1所在位置",
+            normalized_instruction="Aldera用火球术攻击goblin_1所在位置",
+            task="Resolve Fireball centered on goblin_1 position.",
+            reads=[
+                "actors.aldera.spell_dc",
+                "actors.aldera.spell_slots.level_3.current",
+                "actors.goblin_1.position.x",
+                "actors.goblin_1.position.y",
+                "actors.goblin_1.abilities.dex.save",
+            ],
+            judgments=[
+                "Determine which targets are inside the area.",
+                "Each affected target makes a Dexterity save.",
+                "Affected targets take fire damage.",
+            ],
+            writes=["actors.goblin_1.hp.current", "actors.aldera.spell_slots.level_3.current"],
+            assumptions=[],
+            missing_info=[],
+            evidence=["火球术：敏捷豁免，失败全伤，成功半伤"],
+            states=[],
+        )
+        valid_document = {
+            "task_id": "planner.fireball-save",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "dex_save",
+                    "type": "check",
+                    "kind": "save",
+                    "args": {"dice": "1d20", "dc": 15},
+                }
+            ],
+        }
+        template_tool = FakeTemplateTool(
+            {
+                "status": "ok",
+                "template_id": "area-spell.save-damage-half.spell-slot",
+                "step_order": ["select.area", "check.save", "damage.apply", "resource.consume"],
+                "dsl_skeleton": {"steps": []},
+                "required_bindings": ["dc_path"],
+                "binding_rules": {"dc_path": "raw state path"},
+                "common_mistakes": ["do not add state prefix to direct paths"],
+            }
+        )
+        lint_tool = FakeLintTool([{"status": "valid", "summary": "fallback valid", "issues": []}])
+        dsl_factory = SequenceAgentFactory(
+            [{"structured_response": valid_document, "messages": []}],
+            "dsl",
+            call_log,
+        )
+        node = DslNode(
+            DslNodeDependencies(
+                template_tool=template_tool,
+                lint_tool=lint_tool,
+                agent_factory=dsl_factory,
+                model="openai:test-planner",
+                system_prompt="DSL system prompt override",
+                user_prompt_template='{"task_draft":{{task_draft_json}}}',
+            )
+        )
+
+        node.run(draft)
+
+        self.assertEqual([], template_tool.calls)
+        self.assertNotIn("template_query_hint", call_log[1])
+        self.assertNotIn("template_lookup", call_log[1])
+
+    def test_dsl_node_exposes_template_as_real_agent_tool_call(self) -> None:
+        call_log: list[str] = []
+        draft = TaskDraft(
+            instruction="Aldera用火球术攻击goblin_1所在位置",
+            normalized_instruction="Aldera用火球术攻击goblin_1所在位置",
+            task="Resolve Fireball centered on goblin_1 position.",
+            reads=[
+                "actors.aldera.spell_dc",
+                "actors.aldera.spell_slots.level_3.current",
+                "actors.goblin_1.position.x",
+                "actors.goblin_1.position.y",
+                "actors.goblin_1.abilities.dex.save",
+            ],
+            judgments=[
+                "Determine which targets are inside the area.",
+                "Each affected target makes a Dexterity save.",
+                "Affected targets take fire damage.",
+            ],
+            writes=["actors.goblin_1.hp.current", "actors.aldera.spell_slots.level_3.current"],
+            assumptions=[],
+            missing_info=[],
+            evidence=["火球术：敏捷豁免，失败全伤，成功半伤"],
+            states=[],
+        )
+        valid_document = {
+            "task_id": "planner.fireball-save",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "dex_save",
+                    "type": "check",
+                    "kind": "save",
+                    "args": {"dice": "1d20", "dc": 15},
+                }
+            ],
+        }
+        template_tool = FakeTemplateTool(
+            {
+                "status": "ok",
+                "template_id": "area-spell.save-damage-half.spell-slot",
+                "step_order": ["select.area", "check.save", "damage.apply", "resource.consume"],
+                "dsl_skeleton": {"steps": []},
+                "required_bindings": ["dc_path"],
+                "binding_rules": {"dc_path": "raw state path"},
+                "common_mistakes": ["do not add state prefix to direct paths"],
+            }
+        )
+        lint_tool = FakeLintTool([{"status": "valid", "summary": "tool valid", "issues": []}])
+        dsl_factory = ToolCallingAgentFactory(valid_document, "dsl", call_log)
+        node = DslNode(
+            DslNodeDependencies(
+                template_tool=template_tool,
+                lint_tool=lint_tool,
+                agent_factory=dsl_factory,
+                model="openai:test-planner",
+                system_prompt="DSL system prompt override",
+                user_prompt_template='{"task_draft":{{task_draft_json}}}',
+            )
+        )
+
+        _, lint_result = node.run(draft)
+
+        self.assertEqual(
+            [
+                {
+                    "task_family": "area spell or area effect",
+                    "resolution_mode": "save_damage",
+                    "resource_mode": "spell_slot",
+                    "targeting_mode": "center_on_target_position",
+                    "success_rule": "half",
+                }
+            ],
+            template_tool.calls,
+        )
+        self.assertEqual(1, len(lint_tool.calls))
+        self.assertEqual(1, lint_result["dsl_node_meta"]["lint_calls"])
+        self.assertFalse(lint_result["dsl_node_meta"]["used_fallback"])
 
     def test_task_node_passes_available_tools_to_single_agent(self) -> None:
         call_log: list[str] = []

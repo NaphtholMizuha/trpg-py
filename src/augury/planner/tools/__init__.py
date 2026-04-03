@@ -38,6 +38,7 @@ from augury.planner.tools.reads import (
     create_reads_tool,
     read_paths,
 )
+from augury.planner.tools.template import TemplateInput, TemplateTool, create_template_tool
 from augury.planner.tools.search import (
     FastEmbedSparseEmbedder,
     HTTPReranker,
@@ -80,6 +81,9 @@ __all__ = [
     "create_grep_tool",
     "create_read_tool",
     "create_reads_tool",
+    "TemplateInput",
+    "TemplateTool",
+    "create_template_tool",
     "build_default_searcher",
     "create_search_tool",
     "grep_lines",
