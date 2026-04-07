@@ -1,0 +1,153 @@
+[actors.aldera]
+id = "aldera"
+name = "艾尔德拉·银誓"
+side = "player"
+alive = true
+position = { x = 5, y = 10 }
+hp = { current = 18, max = 36, temporary = 0 }
+spell_dc = 15
+spell_attack_bonus = 7
+
+[actors.aldera.ac]
+total = 18
+breakdown = [
+    { reason = "链甲", value = 16 },
+    { reason = "盾牌", value = 2 },
+]
+
+[actors.aldera.abilities.dex]
+score = 12
+modifier = 1
+save = 1
+
+[actors.aldera.equipment.main_hand]
+name = "+1长剑"
+attack_bonus = 7
+damage = [{ dice = "1d8", bonus = 4, damage_type = "slashing" }]
+
+[actors.aldera.attacks.longsword]
+label = "+1长剑"
+to_hit = 7
+reach = 5
+damage = [{ dice = "1d8", bonus = 4, damage_type = "slashing" }]
+
+[actors.aldera.spell_slots.level_1]
+current = 2
+max = 2
+
+[actors.aldera.spell_slots.level_3]
+current = 1
+max = 1
+
+[actors.aldera.spells]
+cantrips = ["火焰箭"]
+level_1 = ["治疗伤口"]
+level_3 = ["火球术"]
+
+[actors.malik]
+id = "malik"
+name = "马利克"
+side = "player"
+alive = true
+position = { x = 40, y = 40 }
+hp = { current = 12, max = 28, temporary = 0 }
+spell_dc = 14
+spell_attack_bonus = 6
+
+[actors.malik.ac]
+total = 15
+breakdown = [
+    { reason = "护甲", value = 13 },
+    { reason = "敏捷", value = 2 },
+]
+
+[actors.malik.abilities.dex]
+score = 14
+modifier = 2
+save = 2
+
+[actors.malik.spell_slots.level_1]
+current = 3
+max = 3
+
+[actors.malik.spell_slots.level_3]
+current = 1
+max = 1
+
+[actors.malik.spells]
+level_1 = ["治疗伤口"]
+level_3 = ["闪电束"]
+
+[actors.goblin_1]
+id = "goblin_1"
+name = "洞穴哥布林斥候"
+side = "enemy"
+alive = true
+position = { x = 4, y = 10 }
+hp = { current = 7, max = 7, temporary = 0 }
+
+[actors.goblin_1.ac]
+total = 13
+breakdown = [
+    { reason = "皮甲", value = 11 },
+    { reason = "敏捷", value = 2 },
+]
+
+[actors.goblin_1.abilities.dex]
+score = 14
+modifier = 2
+save = 2
+
+[actors.goblin_1.attacks.shortbow]
+label = "短弓"
+to_hit = 4
+range = "80/320"
+damage = [{ dice = "1d6", bonus = 2, damage_type = "piercing" }]
+
+[actors.goblin_1.attacks.scimitar]
+label = "弯刀"
+to_hit = 4
+reach = 5
+damage = [{ dice = "1d6", bonus = 2, damage_type = "slashing" }]
+
+[actors.goblin_2]
+id = "goblin_2"
+name = "洞穴哥布林突袭者"
+side = "enemy"
+alive = true
+position = { x = 41, y = 40 }
+hp = { current = 9, max = 9, temporary = 0 }
+
+[actors.goblin_2.ac]
+total = 13
+
+[actors.goblin_2.abilities.dex]
+score = 14
+modifier = 2
+save = 2
+
+[actors.goblin_2.attacks.scimitar]
+label = "弯刀"
+to_hit = 4
+reach = 5
+damage = [{ dice = "1d6", bonus = 2, damage_type = "slashing" }]
+
+[actors.orc_1]
+id = "orc_1"
+name = "兽人掠夺者"
+side = "enemy"
+alive = true
+position = { x = 55, y = 40 }
+hp = { current = 22, max = 22, temporary = 0 }
+
+[actors.orc_1.ac]
+total = 13
+
+[actors.orc_1.abilities.dex]
+score = 12
+modifier = 1
+save = 1
+
+[environment]
+scene = "双线交战的地下遗迹"
+notes = "Aldera 与 goblin_1 在近战缠斗；Malik 与 goblin_2、orc_1 位于另一侧走廊。"

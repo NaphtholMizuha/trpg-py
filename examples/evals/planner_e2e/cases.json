@@ -1,0 +1,145 @@
+{
+  "suite_name": "planner_e2e_default",
+  "world_state_file": "world_state.toml",
+  "default_dice": [
+    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4
+  ],
+  "cases": [
+    {
+      "case_id": "01_aldera_longsword_goblin_1",
+      "instruction": "Aldera用长剑攻击goblin_1",
+      "description": "直接近战攻击应命中 goblin_1 并写回生命值。",
+      "tags": ["attack", "melee", "single-target"],
+      "dice": [15, 6],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.goblin_1.hp.current"],
+        "expected_step_signatures": ["check.attack", "damage.apply"]
+      }
+    },
+    {
+      "case_id": "02_goblin_2_scimitar_malik",
+      "instruction": "Goblin_2用弯刀攻击Malik",
+      "description": "敌方近战攻击应命中 Malik 并造成伤害。",
+      "tags": ["attack", "enemy", "melee"],
+      "dice": [15, 4],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.malik.hp.current"],
+        "expected_step_signatures": ["check.attack", "damage.apply"]
+      }
+    },
+    {
+      "case_id": "03_goblin_1_shortbow_aldera",
+      "instruction": "Goblin_1用短弓攻击Aldera",
+      "description": "敌方远程攻击应命中 Aldera 并写回生命值。",
+      "tags": ["attack", "enemy", "ranged"],
+      "dice": [20, 4],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.aldera.hp.current"],
+        "expected_step_signatures": ["check.attack", "damage.apply"]
+      }
+    },
+    {
+      "case_id": "04_aldera_fire_bolt_orc_1",
+      "instruction": "Aldera用火焰箭攻击orc_1",
+      "description": "具名法术攻击应对 orc_1 造成火焰伤害。",
+      "tags": ["spell", "attack", "single-target"],
+      "dice": [15, 7],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.orc_1.hp.current"],
+        "expected_step_signatures": ["check.attack", "damage.apply"]
+      }
+    },
+    {
+      "case_id": "05_malik_cure_wounds_self",
+      "instruction": "Malik对自己施放治疗伤口",
+      "description": "自疗应恢复 Malik 的生命值并消耗 1 环法术位。",
+      "tags": ["spell", "heal", "self-target"],
+      "dice": [6, 5],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.malik.hp.current", "actors.malik.spell_slots.level_1.current"],
+        "expected_step_signatures": ["heal.apply", "resource.consume"]
+      }
+    },
+    {
+      "case_id": "06_malik_cure_wounds_aldera",
+      "instruction": "Malik对Aldera施放治疗伤口",
+      "description": "对他人施放治疗应恢复 Aldera 的生命值并消耗 1 环法术位。",
+      "tags": ["spell", "heal", "ally-target"],
+      "dice": [5, 4],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.aldera.hp.current", "actors.malik.spell_slots.level_1.current"],
+        "expected_step_signatures": ["heal.apply", "resource.consume"]
+      }
+    },
+    {
+      "case_id": "07_malik_lightning_bolt_orc_1",
+      "instruction": "Malik用闪电束攻击orc_1",
+      "description": "范围直线法术应包含 area 选择、豁免、伤害和法术位消耗。",
+      "tags": ["spell", "area", "save", "resource"],
+      "dice": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.orc_1.hp.current", "actors.malik.spell_slots.level_3.current"],
+        "expected_step_signatures": ["select.area", "check.save", "damage.apply", "resource.consume"]
+      }
+    },
+    {
+      "case_id": "08_aldera_fireball_explicit_center",
+      "instruction": "Aldera用火球术攻击goblin_1所在位置",
+      "description": "显式爆点的火球术应包含 area 选择、豁免、伤害和法术位消耗。",
+      "tags": ["spell", "area", "explicit-center", "save", "resource"],
+      "dice": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_changed_paths": ["actors.goblin_1.hp.current", "actors.aldera.spell_slots.level_3.current"],
+        "expected_step_signatures": ["select.area", "check.save", "damage.apply", "resource.consume"]
+      }
+    },
+    {
+      "case_id": "09_aldera_fireball_ambiguous_goblin",
+      "instruction": "Aldera用火球术攻击goblin",
+      "description": "未指明具体 goblin 或爆点时，应诚实暴露缺口而不是伪装成完整执行计划。",
+      "tags": ["spell", "area", "missing-info", "needs-human"],
+      "expectation": {
+        "expected_workflow_status": "needs_human"
+      }
+    },
+    {
+      "case_id": "10_record_aldera_ac",
+      "instruction": "记录Aldera当前AC供下一轮使用",
+      "description": "状态投影任务应 lower 为直接状态步骤，并保持链路可执行。",
+      "tags": ["state", "projection", "query-like"],
+      "expectation": {
+        "expected_workflow_status": "ready",
+        "expected_lint_status": "valid",
+        "expected_execution_status": "success",
+        "expected_step_signatures": ["state.set"]
+      }
+    }
+  ]
+}

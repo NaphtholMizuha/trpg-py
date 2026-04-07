@@ -164,7 +164,7 @@ class PlannerWorkflowTests(unittest.TestCase):
         self.assertIn("resource.consume", system_prompt)
         self.assertIn("The internal `template` tool is available", system_prompt)
         self.assertIn("Prefer using `template` before relying on memory", system_prompt)
-        self.assertIn("explicitly call `template` yourself", system_prompt)
+        self.assertIn("Explicitly call `template` yourself", system_prompt)
         self.assertIn("Exact `template` enum literals", system_prompt)
         self.assertIn("Never send undocumented near-synonyms such as `area_spell`.", system_prompt)
         self.assertNotIn("prefetched `template_query_hint`", system_prompt)
@@ -176,6 +176,9 @@ class PlannerWorkflowTests(unittest.TestCase):
         self.assertIn("When `lint` returns structured issues with an `expected` template", system_prompt)
         self.assertIn("Do not invent project-external step types", system_prompt)
         self.assertIn("read`, `calculate`, `invoke`, `conditional`, or `write", system_prompt)
+        self.assertIn("Primitive responsibilities:", system_prompt)
+        self.assertIn("`select.area` determines which creatures are covered", system_prompt)
+        self.assertIn("Freehand composition is allowed", system_prompt)
         self.assertIn("Build a valid TaskDocument in the current engine DSL.", user_prompt)
         self.assertIn("The final goal is to return a TaskDocument that is lint valid", user_prompt)
         self.assertIn('"task_draft": {{task_draft_json}}', user_prompt)
@@ -193,14 +196,17 @@ class PlannerWorkflowTests(unittest.TestCase):
         self.assertNotIn("repair_mode", user_prompt)
         self.assertNotIn("lint_budget", user_prompt)
         self.assertIn("Do not generate any step type outside select/check/damage/heal/resource/effect/state.", user_prompt)
+        self.assertIn("primitive_semantics", user_prompt)
+        self.assertIn("Freehand primitive composition is allowed", user_prompt)
         self.assertIn("translation_rules", user_prompt)
 
     def test_dsl_node_prompt_files_include_lowering_few_shots(self) -> None:
         user_prompt = Path("config/prompts/planner_dsl_node_user.txt").read_text(encoding="utf-8")
 
-        self.assertIn("single-target attack", user_prompt)
-        self.assertIn("area spell or area effect", user_prompt)
-        self.assertIn("direct state update", user_prompt)
+        self.assertIn("single-target attack dataflow", user_prompt)
+        self.assertIn("area spell dataflow", user_prompt)
+        self.assertIn("direct state update fallback", user_prompt)
+        self.assertIn("`damage.apply` turns damage formulas plus optional save or attack results into HP writes.", user_prompt)
         self.assertIn('"type": "damage"', user_prompt)
         self.assertIn('"kind": "apply"', user_prompt)
         self.assertIn('"type": "resource"', user_prompt)
@@ -223,13 +229,16 @@ class PlannerWorkflowTests(unittest.TestCase):
                 }
             )
 
-    def test_task_node_prompt_files_define_judgment_first_order(self) -> None:
+    def test_task_node_prompt_files_define_execution_first_order(self) -> None:
         system_prompt = Path("config/prompts/planner_task_node_system.txt").read_text(encoding="utf-8")
         user_prompt = Path("config/prompts/planner_task_node_user.txt").read_text(encoding="utf-8")
 
-        self.assertIn("optional search", system_prompt)
-        self.assertIn("Write the judgments before you finalize reads or writes", system_prompt)
-        self.assertIn("Use the internal order: classify task shape, optional search first, then judgments, then grep", user_prompt)
+        self.assertIn("honest execution brief", system_prompt)
+        self.assertIn("Draft provisional judgments in execution order", system_prompt)
+        self.assertIn("Do not force the instruction into a prototype", system_prompt)
+        self.assertNotIn("First classify the task shape before you search or grep.", system_prompt)
+        self.assertIn("Start from the intended world change or question", user_prompt)
+        self.assertIn("Draft provisional judgments before finalizing reads or writes.", user_prompt)
         self.assertIn("reads, writes, missing_info, and assumptions must be derived from the judgments", user_prompt)
 
     def test_task_node_prompt_files_require_rule_driven_alignment(self) -> None:
@@ -250,17 +259,15 @@ class PlannerWorkflowTests(unittest.TestCase):
         self.assertIn("not a tool log or a full rule quotation", user_prompt)
         self.assertIn("states must contain only short state evidence lines", user_prompt)
 
-    def test_task_node_prompt_files_define_task_shape_prototypes(self) -> None:
+    def test_task_node_prompt_files_keep_task_shapes_as_optional_hints(self) -> None:
         system_prompt = Path("config/prompts/planner_task_node_system.txt").read_text(encoding="utf-8")
         user_prompt = Path("config/prompts/planner_task_node_user.txt").read_text(encoding="utf-8")
 
-        self.assertIn("single-target attack", system_prompt)
-        self.assertIn("single-target spell", system_prompt)
-        self.assertIn("area spell or area effect", system_prompt)
-        self.assertIn("healing or buff", system_prompt)
-        self.assertIn("condition or status effect", system_prompt)
-        self.assertIn("pure state query", system_prompt)
-        self.assertIn("classify the task into a prototype", user_prompt)
+        self.assertIn("Task-shape patterns such as attack, spell, area effect, healing, condition, or pure query may help you think", system_prompt)
+        self.assertIn("Do not force the instruction into a prototype", system_prompt)
+        self.assertIn("not from mandatory task prototype classification", user_prompt)
+        self.assertIn("Treat any few-shot examples as demonstrations of evidence gathering and gap exposure", user_prompt)
+        self.assertNotIn("classify the task into a prototype", user_prompt)
 
     def test_task_node_prompt_files_require_aoe_position_and_slot_binding(self) -> None:
         system_prompt = Path("config/prompts/planner_task_node_system.txt").read_text(encoding="utf-8")
@@ -278,22 +285,21 @@ class PlannerWorkflowTests(unittest.TestCase):
         user_prompt = Path("config/prompts/planner_task_node_user.txt").read_text(encoding="utf-8")
 
         self.assertIn("Malik用闪电束攻击orc", system_prompt)
-        self.assertIn("then grep for `malik && position`", system_prompt)
-        self.assertIn("then grep for `orc && position`", system_prompt)
+        self.assertIn("Preserve `Lightning Bolt` as the rule anchor", system_prompt)
+        self.assertIn("Use grep for position, hp, save, dc, and slot evidence", system_prompt)
         self.assertNotIn("Aldera用火球术攻击goblin", system_prompt)
         self.assertNotIn("火球术 Fireball", system_prompt)
         self.assertIn("intentionally excludes `火球术 Fireball`", user_prompt)
 
-    def test_task_node_prompt_files_define_search_query_modes(self) -> None:
+    def test_task_node_prompt_files_preserve_rule_anchors_without_fixed_search_modes(self) -> None:
         system_prompt = Path("config/prompts/planner_task_node_system.txt").read_text(encoding="utf-8")
         user_prompt = Path("config/prompts/planner_task_node_user.txt").read_text(encoding="utf-8")
 
-        self.assertIn("term", system_prompt)
-        self.assertIn("balanced", system_prompt)
-        self.assertIn("semantic", system_prompt)
-        self.assertIn("Use `balanced` when a named rule is known and you need a few concrete resolution details", system_prompt)
-        self.assertIn("choose one search mode: `term`, `balanced`, or `semantic`", user_prompt)
-        self.assertIn("Use `semantic` only when there is no reliable rule-term anchor", user_prompt)
+        self.assertIn("Preserve any explicit rule term as the search anchor", system_prompt)
+        self.assertIn("Do not rewrite a named rule into a purely semantic description", system_prompt)
+        self.assertIn("Use more semantic search only when there is no reliable rule-term anchor", user_prompt)
+        self.assertIn("Do not rewrite a named rule into a purely semantic query", user_prompt)
+        self.assertNotIn("choose one search mode: `term`, `balanced`, or `semantic`", user_prompt)
 
     def test_workflow_uses_langgraph_and_create_agent_backed_nodes(self) -> None:
         call_log: list[str] = []
@@ -697,6 +703,69 @@ class PlannerWorkflowTests(unittest.TestCase):
         self.assertEqual(1, lint_result["dsl_node_meta"]["lint_calls"])
         self.assertTrue(lint_result["dsl_node_meta"]["used_fallback"])
         self.assertEqual(5, lint_result["dsl_node_meta"]["max_tool_calls"])
+
+    def test_dsl_node_can_recover_task_document_from_final_message_json(self) -> None:
+        call_log: list[str] = []
+        draft = TaskDraft(
+            instruction="Track Aldera AC",
+            normalized_instruction="Track Aldera AC",
+            task="Read Aldera AC and carry it into tracked state.",
+            reads=["actors.aldera.ac"],
+            judgments=["Use Aldera AC as the defensive threshold."],
+            writes=["actors.aldera.ac"],
+            assumptions=[],
+            missing_info=[],
+            evidence=[],
+            states=[],
+        )
+        valid_document = {
+            "task_id": "planner.track-aldera-ac",
+            "version": 1,
+            "policy": {},
+            "context": {},
+            "steps": [
+                {
+                    "id": "record_aldera_ac",
+                    "type": "state",
+                    "kind": "set",
+                    "args": {"path": "actors.aldera.ac", "value": 18},
+                }
+            ],
+        }
+        lint_tool = FakeLintTool([{"status": "valid", "summary": "fallback valid", "issues": []}])
+        dsl_factory = SequenceAgentFactory(
+            [
+                {
+                    "messages": [
+                        {"name": "template", "content": json.dumps({"status": "ok"}, ensure_ascii=False)},
+                        {
+                            "content": (
+                                "<think>\nDrafting final TaskDocument.\n</think>\n\n"
+                                + json.dumps(valid_document, ensure_ascii=False, indent=2)
+                            )
+                        },
+                    ]
+                }
+            ],
+            "dsl",
+            call_log,
+        )
+        node = DslNode(
+            DslNodeDependencies(
+                lint_tool=lint_tool,
+                agent_factory=dsl_factory,
+                model="openai:test-planner",
+                system_prompt="DSL system prompt override",
+                user_prompt_template='{"task_draft":{{task_draft_json}}}',
+            )
+        )
+
+        document, lint_result = node.run(draft)
+
+        self.assertEqual("planner.track-aldera-ac", document["task_id"])
+        self.assertEqual("valid", lint_result["status"])
+        self.assertEqual(1, len(lint_tool.calls))
+        self.assertTrue(lint_result["dsl_node_meta"]["used_fallback"])
 
     def test_dsl_node_prompt_can_reference_template_guidance_from_lint(self) -> None:
         user_prompt = Path("config/prompts/planner_dsl_node_user.txt").read_text(encoding="utf-8")

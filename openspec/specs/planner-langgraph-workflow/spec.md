@@ -145,13 +145,13 @@
 - **那么** `TaskDraft` 不得输出看似完整的单目标结算计划来掩盖这一不确定性
 
 ### 需求:task_node 的 few-shot 必须展示位置获取且不得复用 Fireball 评测样例
-系统必须要求 `task_node` prompt 中的 few-shot 用约 5-6 个任务类型原型覆盖主要任务结构，并在范围效果示例里显式展示位置获取步骤。系统禁止直接把 `Fireball` 写入 few-shot 作为示例，以避免 smoke 与评测样例失真。
+系统必须要求 `task_node` prompt 中的 few-shot 仅在确有必要时作为辅助示例，用于展示如何发现关键前提、绑定状态证据和暴露缺口。系统禁止继续把“覆盖约 5-6 个任务类型原型”作为默认硬要求。系统仍然禁止直接把 `Fireball` 写入 few-shot 作为示例，以避免 smoke 与评测样例失真。
 
-#### 场景:few-shot 覆盖主要任务类型原型
+#### 场景:few-shot 作为可选辅助而非主入口
 - **当** `task_node` prompt 使用 few-shot 教模型处理 TRPG 任务
-- **那么** few-shot 必须覆盖约 5-6 个任务类型原型
-- **那么** 这些原型至少必须包括单体攻击、单体法术、范围法术、治疗或增益、状态或条件效果、纯状态查询中的主要类别
-- **那么** each few-shot 的目的必须是教模型识别任务结构与检索顺序，而不是记忆某一个评测题目的固定答案
+- **那么** few-shot 可以只覆盖少量高价值代表性过程
+- **那么** few-shot 的主要目的必须是示范如何识别前提、取证和暴露缺口
+- **那么** few-shot 不得被规定为必须覆盖固定数量的任务类型原型
 
 #### 场景:范围效果 few-shot 展示位置前提
 - **当** `task_node` prompt 使用 few-shot 教模型处理范围效果任务
@@ -187,12 +187,12 @@
 - **那么** few-shot 必须展示从 instruction 到 `grep` 使用再到任务稿取舍的代表性过程
 
 ### 需求:task_node prompt 必须采用 judgment-first 顺序
-系统必须要求 `task_node` 的 prompt 明确采用 judgment-first 的内部顺序，禁止继续让 `judgments`、`reads`、`writes` 平行自由生成。
+系统必须要求 `task_node` 的 prompt 以 `judgments` 为核心组织 `TaskDraft`，并让 reads、writes、missing_info 与 assumptions 围绕执行需求和证据缺口派生。系统禁止继续把固定的分类步骤、固定的 search 仪式或平行自由生成当作默认主流程。
 
 #### 场景:规则驱动任务生成 TaskDraft
 - **当** `task_node` 处理法术、状态效果、豁免、反应或其他规则驱动任务
-- **那么** prompt 必须先要求 agent 判断是否需要 search
-- **那么** 如果需要，prompt 必须要求先 search，再形成 judgments
+- **那么** prompt 必须允许模型先形成 provisional judgments，再决定是否需要 search 或 grep
+- **那么** prompt 不得要求 search 一定先于任何 judgments 出现
 - **那么** prompt 必须要求 reads、writes、missing_info 和 assumptions 都围绕 judgments 再由 grep 绑定或补缺
 
 #### 场景:根据 judgments 派生 reads 与 writes
@@ -202,25 +202,18 @@
 - **那么** 无法绑定到 exact path 的部分必须进入 missing_info 或 assumptions，而不是直接猜测
 
 ### 需求:task_node prompt 必须为规则检索选择查询模式
-系统必须要求 `task_node` 在规则优先任务中调用 `search` 前，先判断当前任务是否存在明确规则术语，并在 `term`、`balanced`、`semantic` 三种查询模式中选择其一。系统禁止继续把所有规则检索都统一改写为 HyDE 风格自然语言查询。
+系统必须要求 `task_node` 在规则优先任务中保留规则术语锚点、避免规则身份漂移，并仅在缺少可靠术语时转向更语义化的检索。系统禁止继续把 `term`、`balanced`、`semantic` 三种查询模式当作每次都必须显式完成的前置分类仪式。
 
-#### 场景:存在明确规则术语且只需定位条目
-- **当** `task_node` 处理包含明确规则术语的规则优先任务，且当前只需要确认规则条目身份
-- **那么** prompt 必须引导 agent 选择 `term` 模式
-- **那么** query 必须保留规则术语原词
-- **那么** query 禁止被改写成宽泛的规则场景描述
-
-#### 场景:存在明确规则术语且需要少量结算细节
-- **当** `task_node` 处理包含明确规则术语的规则优先任务，且当前 judgments 还需要少量结算信息
-- **那么** prompt 必须引导 agent 选择 `balanced` 模式
-- **那么** query 必须保留规则术语锚点
-- **那么** query 只能补充当前 judgments 真正需要确认的少量规则点
+#### 场景:存在明确规则术语锚点
+- **当** `task_node` 处理包含明确规则术语的规则优先任务
+- **那么** prompt 必须要求 query 保留该规则术语锚点
+- **那么** prompt 不得鼓励模型把具名法术或动作先改写成宽泛规则场景再检索
 
 #### 场景:不存在可靠规则术语锚点
 - **当** `task_node` 处理规则优先任务，但指令或 judgments 中没有可靠的规则术语锚点
-- **那么** prompt 必须引导 agent 选择 `semantic` 模式
-- **那么** query 可以使用中文自然语言描述规则场景
-- **那么** agent 不得假装已经确认某个具体规则名称
+- **那么** prompt 必须允许模型使用更语义化的规则场景描述
+- **那么** prompt 必须要求模型在规则身份不明确时保守处理
+- **那么** prompt 不得要求模型先完成固定的三选一查询模式判定才能继续 reasoning
 
 ### 需求:task_node prompt 必须区分规则身份证据与结算证据
 系统必须要求 `task_node` 在消费 search 结果时区分“规则身份定位”与“规则结算理解”两类证据，禁止把语义相似但身份不明的规则命中直接当作目标规则本体。

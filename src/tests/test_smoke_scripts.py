@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -9,8 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+sys.path.insert(0, "src")
+
 from loguru import logger
-from smoke import test_dsl, test_grep, test_linter, test_reads, test_search, test_task
+from smoke import test_dsl, test_grep, test_linter, test_planner_engine_eval, test_reads, test_search, test_task
+from smoke.planner_e2e_eval import CaseExpectation, EvalCase, EvalSuite
 from augury.planner.task_document import TaskDraft
 from augury.planner.tools import create_lint_tool, create_template_tool
 
@@ -286,6 +290,86 @@ def run_dsl_script_with_invalid_lint(*args: str) -> tuple[str, dict[str, object]
     return buffer.getvalue(), payload
 
 
+def build_fake_eval_suite() -> EvalSuite:
+    return EvalSuite(
+        suite_name="planner_e2e_default",
+        world_state_file=Path("/tmp/world_state.toml"),
+        default_dice=[4, 4, 4, 4],
+        cases=[
+            EvalCase(
+                case_id="01_ready_case",
+                instruction="Aldera用长剑攻击goblin_1",
+                description="ready case",
+                tags=["attack"],
+                expectation=CaseExpectation(
+                    expected_workflow_status="ready",
+                    expected_lint_status="valid",
+                    expected_execution_status="success",
+                    expected_changed_paths=["actors.goblin_1.hp.current"],
+                ),
+            ),
+            EvalCase(
+                case_id="02_needs_human_case",
+                instruction="Aldera用火球术攻击goblin",
+                description="needs human case",
+                tags=["needs-human"],
+                expectation=CaseExpectation(
+                    expected_workflow_status="needs_human",
+                ),
+            ),
+        ],
+    )
+
+
+def build_fake_eval_result(case_id: str) -> dict[str, object]:
+    workflow_status = "ready" if case_id == "01_ready_case" else "needs_human"
+    execution_status = "success" if case_id == "01_ready_case" else "skipped"
+    return {
+        "case_id": case_id,
+        "instruction": f"instruction for {case_id}",
+        "workflow_result": {"status": workflow_status},
+        "draft": {"reads": [], "writes": []},
+        "missing_info": [] if workflow_status == "ready" else ["需要明确 goblin 指代"],
+        "task_document": {"steps": []} if workflow_status == "ready" else None,
+        "step_signatures": [],
+        "lint_result": {"status": "valid"} if workflow_status == "ready" else None,
+        "execution_result": {
+            "status": execution_status,
+            "reason": None if execution_status == "success" else "workflow_not_ready",
+            "report": None,
+            "state_changes": [],
+        },
+        "state_changes": [{"path": "actors.goblin_1.hp.current", "old_value": 7, "new_value": 0}]
+        if workflow_status == "ready"
+        else [],
+        "evaluation": {"passed": True, "failure_reasons": []},
+    }
+
+
+def run_planner_engine_eval_script(*args: str) -> tuple[str, dict[str, object]]:
+    buffer = io.StringIO()
+    payload: dict[str, object] = {}
+
+    def fake_run_eval_case(case, *, suite, initial_state, config_path):  # type: ignore[no-untyped-def]
+        return build_fake_eval_result(case.case_id)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with patch("smoke.test_planner_engine_eval.load_eval_suite", return_value=build_fake_eval_suite()):
+            with patch("smoke.test_planner_engine_eval.load_eval_state", return_value={"actors": {}}):
+                with patch("smoke.test_planner_engine_eval.run_eval_case", new=fake_run_eval_case):
+                    cli_args = [*args]
+                    if "--log-dir" not in cli_args:
+                        cli_args.extend(["--log-dir", temp_dir])
+                    with patch("sys.argv", ["test_planner_engine_eval.py", *cli_args]):
+                        with redirect_stdout(buffer):
+                            raise_code = test_planner_engine_eval.main()
+    if raise_code not in (None, 0):
+        raise AssertionError(f"planner engine eval script returned unexpected code: {raise_code}")
+    if "--json" in args:
+        payload = json.loads(buffer.getvalue())
+    return buffer.getvalue(), payload
+
+
 class SmokeSearchScriptTests(unittest.TestCase):
     def test_search_smoke_script_supports_json_output(self) -> None:
         payload = run_search_script("--json", "fireball spell")
@@ -549,3 +633,37 @@ class SmokeDslScriptTests(unittest.TestCase):
         self.assertEqual("1d20", payload["lint_result"]["issues"][0]["expected"]["canonical_example"]["args"]["dice"])
         self.assertTrue(payload["lint_result"]["dsl_node_meta"]["used_fallback"])
         self.assertIn('"status": "skipped"', output)
+
+
+class SmokePlannerEngineEvalScriptTests(unittest.TestCase):
+    def test_planner_engine_eval_script_supports_json_output(self) -> None:
+        _, payload = run_planner_engine_eval_script("--json")
+
+        self.assertEqual("planner_e2e_default", payload["suite_name"])
+        self.assertEqual(2, payload["count"])
+        self.assertEqual(2, payload["summary"]["passed"])
+        self.assertEqual("01_ready_case", payload["results"][0]["case_id"])
+        self.assertTrue(payload["results"][0]["log_file"].endswith("01_ready_case.json"))
+        self.assertTrue(payload["summary_file"].endswith("summary.json"))
+
+    def test_planner_engine_eval_script_prints_human_summary(self) -> None:
+        output, _ = run_planner_engine_eval_script()
+
+        self.assertIn("TRPG Planner Engine End-to-End Eval", output)
+        self.assertIn("cases       : 2", output)
+        self.assertIn("passed      : 2", output)
+        self.assertIn("- 01_ready_case: PASS", output)
+        self.assertIn("- 02_needs_human_case: PASS", output)
+        self.assertIn("workflow  : ready", output)
+        self.assertIn("workflow  : needs_human", output)
+
+    def test_planner_engine_eval_script_supports_case_filter(self) -> None:
+        _, payload = run_planner_engine_eval_script("--json", "--case", "02_needs_human_case")
+
+        self.assertEqual(1, payload["count"])
+        self.assertEqual("02_needs_human_case", payload["results"][0]["case_id"])
+        self.assertEqual("needs_human", payload["results"][0]["workflow_result"]["status"])
+
+    def test_planner_engine_eval_script_raises_for_unknown_case_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown case ids"):
+            run_planner_engine_eval_script("--case", "missing_case")

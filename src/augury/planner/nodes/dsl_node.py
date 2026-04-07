@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from langchain.agents import create_agent
+from pydantic import ValidationError
 
 from augury.config import ProjectConfig
 from augury.planner.model_loader import load_planner_chat_model
@@ -117,12 +118,78 @@ def _coerce_task_document(response: Any) -> dict[str, Any]:
     candidate = response
     if isinstance(response, dict) and "structured_response" in response:
         candidate = response["structured_response"]
-    if isinstance(candidate, TaskDocumentSchema):
-        return candidate.model_dump()
+    validated = _validate_task_document_candidate(candidate)
+    if validated is not None:
+        return validated.model_dump()
+    message_candidate = _extract_task_document_from_messages(response)
+    if message_candidate is not None:
+        validated = _validate_task_document_candidate(message_candidate)
+        if validated is not None:
+            return validated.model_dump()
     if hasattr(candidate, "model_dump"):
         candidate = candidate.model_dump()
     validated = TaskDocumentSchema.model_validate(candidate)
     return validated.model_dump()
+
+
+def _validate_task_document_candidate(candidate: Any) -> TaskDocumentSchema | None:
+    if isinstance(candidate, TaskDocumentSchema):
+        return candidate
+    if hasattr(candidate, "model_dump"):
+        candidate = candidate.model_dump()
+    try:
+        return TaskDocumentSchema.model_validate(candidate)
+    except ValidationError:
+        return None
+
+
+def _extract_task_document_from_messages(response: Any) -> dict[str, Any] | None:
+    for message in reversed(_iter_response_messages(response)):
+        parsed = _parse_task_document_message(_get_message_content(message))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_task_document_message(content: Any) -> dict[str, Any] | None:
+    if isinstance(content, dict):
+        return content if _looks_like_task_document_payload(content) else None
+    if isinstance(content, str):
+        parsed = _parse_embedded_json_object(content)
+        if parsed is None:
+            return None
+        return parsed if isinstance(parsed, dict) and _looks_like_task_document_payload(parsed) else None
+    if isinstance(content, list):
+        text_fragments: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                text_fragments.append(item["text"])
+        if text_fragments:
+            return _parse_task_document_message("".join(text_fragments))
+    return None
+
+
+def _looks_like_task_document_payload(candidate: dict[str, Any]) -> bool:
+    return all(field in candidate for field in ["task_id", "version", "steps"])
+
+
+def _parse_embedded_json_object(content: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        extracted = json.loads(content[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return extracted if isinstance(extracted, dict) else None
 
 
 def _resolve_prompt_set(dependencies: DslNodeDependencies):
