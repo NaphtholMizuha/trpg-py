@@ -59,17 +59,8 @@
 - **那么** `lint` 必须尽量在一次返回中暴露这些独立问题
 - **那么** 调用方不需要通过多轮“修一个错再看到下一个错”的方式才能发现全部明显问题
 
-#### 场景:dsl 节点消费 lint issues 进入 repair 回路
-- **当** `dsl_node` 收到 lint 返回的非法结果
-- **那么** 返回结果中的 issues 必须足够稳定，供 `dsl_node` 作为 repair 输入直接消费
-- **那么** 调用方无需先把 issues 重新解析成另一套私有格式
+#### 场景:lint 拦截 runtime-sensitive DSL 形状错误
+- **当** 候选 `TaskDocument` 使用了当前 runtime 不支持但结构上看似合理的形状，例如错误的 `select.area.shape` 嵌套对象或错误层级的参数字段
+- **那么** `lint` 必须在执行前把该候选判为 `invalid`
+- **那么** 返回体必须指出对应步骤路径和形状错误，而不是把问题留到 engine runtime 才暴露
 
-#### 场景:lint 返回 primitive 的期望模板
-- **当** `lint` 检测到某个受支持 `type.kind` 的 step 或 args 形状不合法
-- **那么** 对应 issue 除了 `path`、`message` 和 `code` 外，必须尽量返回该 primitive 的期望模板信息
-- **那么** 期望模板信息必须至少覆盖必填字段和一个 canonical example
-
-#### 场景:lint 返回常见错误字段或禁止形状提示
-- **当** 某个 primitive 的错误来自常见错误字段名、错误嵌套层级或不支持的对象形状
-- **那么** 对应 issue 必须尽量指出这些常见错误
-- **那么** 对应 issue 必须帮助调用方区分“少了什么字段”和“字段整体形状错了”两类问题

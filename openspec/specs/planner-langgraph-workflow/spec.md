@@ -19,7 +19,7 @@
 - **那么** 节点必须通过 `langchain.create_agent` 产出的 agent 执行核心推理
 - **那么** 节点必须输出可供下一个节点消费的结构化自然语言任务稿
 
-### 需求: 第一阶段节点必须输出 TaskDraft 而不是受限动作分类
+### 需求:第一阶段节点必须输出 TaskDraft 而不是受限动作分类
 系统必须要求第一阶段节点输出 `TaskDraft` 一类的结构化自然语言任务稿，禁止把中间表示收窄为受限的动作类型标签作为主要输出真相。
 
 #### 场景:task 节点生成任务稿
@@ -27,9 +27,7 @@
 - **那么** 产出的中间对象必须写明要完成什么任务
 - **那么** 产出的中间对象必须写明读取哪些值、基于哪些值做什么判定以及最终写回哪些值
 - **那么** 当必要信息不足时必须显式列出 `missing_info`
-- **那么** 产出的中间对象必须允许通过 `evidence` 字段携带供下游消费的摘要化证据
-- **那么** 产出的中间对象不得继续保留 `read_values`
-- **那么** 产出的中间对象必须使用 `states` 表达状态证据，而不是继续使用 `context_lines`
+- **那么** `missing_info` 不得包含未来由 engine 计算的随机结果
 
 ### 需求: dsl 节点核心必须由 langchain.create_agent 驱动
 系统必须要求 `src/augury/planner/nodes/dsl_node.py` 的核心执行体由 `langchain.create_agent` 创建的 agent 驱动，禁止绕过 agent 直接把中间对象硬编码成最终 DSL 作为最终实现。
@@ -43,41 +41,19 @@
 - **那么** 系统不得为了修复当前问题移除 `dsl_node` 的结构化输出协议
 - **那么** 节点生成的步骤类型与步骤 kind 必须限定在当前 engine 支持的 DSL 词表内
 - **那么** 节点不得发明引擎不支持的高层 workflow 术语作为 step type 或 kind
+- **那么** 节点必须能够调用 `template` 工具查询当前任务族的合法 DSL 骨架
 
-#### 场景:dsl 节点消费模板化 lint 诊断
-- **当** `dsl_node` 获得 `lint` 返回的结构化 issues
-- **那么** 节点必须能够消费其中的模板化诊断信息，而不只把 `message` 当成普通字符串
-- **那么** 节点必须把这些模板化诊断视为生成或修正 DSL 的约束依据之一
+#### 场景:dsl 节点以 template 作为合法骨架来源
+- **当** `dsl_node` 需要为某类任务生成候选 `TaskDocument`
+- **那么** 节点必须先识别当前任务属于哪一类高频任务族
+- **那么** 节点必须优先调用 `template` 工具获取对应 DSL 骨架
+- **那么** 节点不得继续仅依赖 prompt 中内联的大段模板手册自行发明 DSL 结构
 
-#### 场景:dsl 节点以 lint valid 作为最终目标
-- **当** `dsl_node` 生成最终 `TaskDocument`
-- **那么** 节点必须把“返回当前 lint 视角下的 valid 结果”视为默认目标
-- **那么** 节点不得把已经被 `lint` 判为 invalid 的 candidate 当作理想最终状态
-
-#### 场景:dsl 节点把 lint 作为提交前检查
-- **当** `dsl_node` 从 `TaskDraft` 生成候选 `TaskDocument`
-- **那么** 节点必须把 `lint` 视为提交前检查工具，而不是纯可选附属工具
-- **那么** 节点的默认成功标准必须是输出当前 `lint` 视角下的 `valid` TaskDocument`
-- **那么** 节点必须为 agent 提供有限的 `lint` 工具调用预算，以支持受控的再次校验
-
-#### 场景:dsl 节点不应把 lint invalid 当作理想终态
-- **当** `dsl_node` 已经拿到某个 candidate 的 `lint invalid` 结果
-- **那么** 节点不得把该 candidate 视为理想最终答案
-- **那么** 节点必须至少把该结果作为继续修正或重新生成时的约束依据
-
-#### 场景:dsl 节点提供 fallback lint
-- **当** `dsl_node` 最终没有从 agent 响应中获得 `lint` 结果
-- **那么** 节点必须执行至少一次 fallback lint
-- **那么** 节点必须把 fallback 是否触发记录到可观察元数据中
-
-#### 场景:dsl 节点根据 lint 结果修复候选文档
-- **当** `dsl_node` 的首轮候选 `TaskDocument` 未通过 lint
-- **那么** repair 回路必须保持在 `dsl_node` 内部，由 agent 以 ReAct/tool-use 形式调用 `lint`
-- **那么** 系统不得为了 repair 新增外层 LangGraph 节点或新的 planner 阶段
-- **那么** 节点必须能够读取当前 candidate 和对应的结构化 lint issues
-- **那么** 节点必须在有限预算内尝试修复该 candidate，而不是只能返回首轮失败结果
-- **那么** 节点提示词必须明确约束 `lint` 的调用次数和停止条件
-- **那么** 节点在 repair 阶段应尽量保留已合法的步骤，而不是无谓重写整份文档
+#### 场景:dsl 节点同时使用 template 和 lint
+- **当** `dsl_node` 已获得 `template` 返回的 DSL 骨架
+- **那么** 节点必须基于该骨架填充实例参数
+- **那么** 节点仍必须在提交前调用 `lint`
+- **那么** `template` 不得替代 `lint` 的最终守门职责
 
 ### 需求: workflow 必须以显式中间对象在两个 agent 节点之间传递状态
 系统必须在 LangGraph workflow 的状态对象中显式保存第一阶段产出的中间对象，禁止让第二阶段节点只依赖原始 DM 指令或自由文本重新开始理解任务。
@@ -99,6 +75,7 @@
 - **那么** task 节点禁止默认获得 `read` 权限
 - **那么** dsl 节点必须获得面向 DSL 生成与校验的工具集合
 - **那么** dsl 节点生成候选 DSL 时必须能够消费 lint 级错误反馈，而不是只看到单一模糊失败摘要
+- **那么** dsl 节点默认工具集合必须包含 `template`
 
 ### 需求:task_node 必须把关键规则或状态证据以摘录形式写入 evidence
 系统必须要求 `task_node` 在 rule-first 或需要后续阶段理解规则结构的任务中，把它抓取到且认为有用的关键规则或状态证据写入 `TaskDraft.evidence`。系统禁止把长段规则原文直接复制进 `evidence`，也禁止完全不暴露支持关键 judgments 的证据摘要。
@@ -193,7 +170,7 @@
 - **当** `task_node` 处理法术、状态效果、豁免、反应或其他规则驱动任务
 - **那么** prompt 必须允许模型先形成 provisional judgments，再决定是否需要 search 或 grep
 - **那么** prompt 不得要求 search 一定先于任何 judgments 出现
-- **那么** prompt 必须要求 reads、writes、missing_info 和 assumptions 都围绕 judgments 再由 grep 绑定或补缺
+- **那么** prompt 必须要求 reads、writes、missing_info 和 assumptions 围绕 judgments 再由工具证据绑定或补缺
 
 #### 场景:根据 judgments 派生 reads 与 writes
 - **当** `task_node` 已经形成 judgments
@@ -210,7 +187,7 @@
 - **那么** prompt 不得鼓励模型把具名法术或动作先改写成宽泛规则场景再检索
 
 #### 场景:不存在可靠规则术语锚点
-- **当** `task_node` 处理规则优先任务，但指令或 judgments 中没有可靠的规则术语锚点
+- **当** `task_node` 处理规则优先任务，但当前没有可靠规则术语锚点
 - **那么** prompt 必须允许模型使用更语义化的规则场景描述
 - **那么** prompt 必须要求模型在规则身份不明确时保守处理
 - **那么** prompt 不得要求模型先完成固定的三选一查询模式判定才能继续 reasoning
@@ -227,3 +204,87 @@
 - **当** `task_node` 使用 `semantic` 模式，或在 `balanced` 模式下获得更多语义相关结果
 - **那么** prompt 必须引导 agent 将这些结果主要用于补充结算细节
 - **那么** 如果规则身份仍不明确，agent 必须保守处理并把不确定性留在 `missing_info` 或 judgments 之外
+
+### 需求:dsl_node 必须只翻译 TaskDraft 而不是重新理解任务
+系统必须要求 `dsl_node` 将 `TaskDraft` 作为翻译真相。系统禁止 `dsl_node` 在生成 `TaskDocument` 时重新补完任务结构、重新发明缺口解释，或覆盖 `task_node` 已确认的 judgments / evidence / states。
+
+#### 场景:dsl_node 翻译已存在缺口的 TaskDraft
+- **当** `dsl_node` 接收到一个包含 `missing_info` 的 `TaskDraft`
+- **那么** `dsl_node` 必须把这些缺口及其默认值语义翻译进 `TaskDocument`
+- **那么** `dsl_node` 不得自行重新判断这些缺口的默认处理
+- **那么** `dsl_node` 不得把 `TaskDraft` 改写成新的任务理解版本
+
+### 需求:TaskDraft 的 missing_info 必须包含默认值语义
+系统必须要求 `TaskDraft.missing_info` 不再只是自由文本字符串列表，而应包含可供下游直接翻译的默认值或默认处理语义。系统禁止继续只给 `dsl_node` 一段模糊缺口描述再要求其自行推断默认行为。
+
+#### 场景:范围法术缺失爆点时给出默认处理
+- **当** `task_node` 发现某个范围法术任务缺少爆点或覆盖判定信息
+- **那么** `missing_info` 必须显式说明该缺口
+- **那么** `missing_info` 必须同时给出默认值或默认处理方向
+- **那么** `dsl_node` 可以直接翻译该默认值语义，而无需重新猜测
+
+#### 场景:缺失默认值语义时视为 TaskDraft 不完整
+- **当** `TaskDraft.missing_info` 只包含自由文本描述而没有默认值或默认处理语义
+- **那么** 系统不得把该 `TaskDraft` 视为对 `dsl_node` 完整可翻译的中间对象契约
+
+### 需求:dsl_node 的 few-shot 必须复用 task_node 的任务类型原型
+系统必须要求 `dsl_node` prompt 的 few-shot 使用与 `task_node` 一致的任务类型原型。系统禁止 `dsl_node` 维护一套与 `task_node` 脱节的独立场景分类。
+
+#### 场景:dsl_node few-shot 覆盖主要任务类型
+- **当** `dsl_node` prompt 使用 few-shot 教模型翻译 `TaskDraft`
+- **那么** few-shot 必须覆盖与 `task_node` 对齐的主要任务类型原型
+- **那么** 至少必须包括单体攻击、单体法术、范围法术、治疗或增益、状态或条件效果、纯状态查询等主要类别
+- **那么** 每个 few-shot 的重点必须是展示“该类型的 TaskDraft 如何被翻译成 TaskDocument”
+
+### 需求:task_node prompt 必须感知下游 dsl node 和 engine 的职责边界
+系统必须要求 `task_node` 的 prompt 明确知道 TaskDraft 只是 planner workflow 的第一阶段输出，其后还有 `dsl node` 将任务稿翻译为结构化 TaskDocument，且最终由 engine 在运行期执行并求值。系统禁止继续让 `task_node` 假设自己必须在第一阶段补齐所有运行期结果。
+
+#### 场景:task_node 生成规则驱动任务稿
+- **当** `task_node` 处理一条规则驱动的 DM 指令
+- **那么** prompt 必须说明 TaskDraft 会被后续 `dsl node` 消费
+- **那么** prompt 必须说明 TaskDocument 会由 engine 在运行期执行
+- **那么** agent 必须把第一阶段重点放在执行意图、状态依赖和决策结构上，而不是提前产出运行期结果
+
+### 需求:task_node prompt 必须禁止把运行期随机结果写入 missing_info
+系统必须要求 `task_node` 的 prompt 把 `missing_info` 限定为真正阻止 drafting 的前置缺口，禁止把攻击掷骰结果、伤害骰结果、豁免成败等运行期随机结果写入 `missing_info`。
+
+#### 场景:攻击或法术的随机结果尚未产生
+- **当** `task_node` 处理需要未来掷骰、未来豁免或未来伤害计算的任务
+- **那么** prompt 必须说明这些结果会由 engine 在运行期产生
+- **那么** agent 不得因为当前还不知道这些结果就把它们写入 `missing_info`
+- **那么** agent 应继续把这些内容保留在 judgments 或执行计划中
+
+#### 场景:真正缺失的前置信息仍应进入 missing_info
+- **当** `task_node` 无法确认 exact path、规则身份、必要状态值或会改变执行形状的人类决策
+- **那么** agent 仍必须把这些内容写入 `missing_info`
+- **那么** prompt 不得让 agent 因为“后面还有 engine”就忽略这些真实缺口
+
+### 需求:task_node prompt 必须以执行不变量与缺口暴露为主线
+系统必须要求 `task_node` 的 prompt 先识别任务的执行不变量、关键前提、受影响对象和潜在写回，再决定需要哪些工具证据。系统禁止继续把 upfront 任务分类当作主要推理入口。
+
+#### 场景:task_node 处理规则与状态交织的任务
+- **当** `task_node` 处理同时涉及规则形状、状态路径和资源绑定的任务
+- **那么** prompt 必须优先引导模型明确执行目标、关键前提和安全可绑定的写回
+- **那么** prompt 可以把任务原型当作辅助手段
+- **那么** prompt 不得要求模型必须先完成固定任务分类后才能开始形成 `judgments`
+
+#### 场景:task_node 暴露真实缺口
+- **当** `task_node` 无法安全确认路径、覆盖范围、默认环级或受影响对象集合
+- **那么** prompt 必须要求模型保留这种不确定性
+- **那么** prompt 不得让模型用更像某个任务类别的表述来掩盖真实缺口
+
+### 需求:dsl_node 必须基于 primitive 语义做 lowering 与组合
+系统必须要求 `dsl_node` 根据 `TaskDraft` 的 judgments、reads、writes、evidence 和 states，理解每个 engine primitive 在执行链中的职责后再做 lowering。系统禁止继续把 `dsl_node` 默认约束为只能围绕少量任务族模板做机械填空。
+
+#### 场景:dsl_node 生成多步 DSL
+- **当** `dsl_node` 需要把一份复杂 `TaskDraft` 翻译成多步 `TaskDocument`
+- **那么** 节点必须能够理解哪些步骤负责确定对象集合、哪些步骤负责生成判定结果、哪些步骤负责写回状态
+- **那么** 节点必须能够在当前 engine 支持的 step type / kind 范围内自由合理地组合这些 primitive
+- **那么** 节点不得因为某个高层任务族未完全命中模板而放弃合理的 primitive 组合
+
+#### 场景:dsl_node 使用 template 收敛自由组合
+- **当** `dsl_node` 在自由组合 primitive 的同时使用 `template`
+- **那么** `template` 必须帮助节点确认合法 shape、默认骨架与常见错误
+- **那么** 节点仍必须以 primitive 运行语义和 `TaskDraft` 真相为主
+- **那么** 系统不得把 `template` 视为唯一允许的 primitive 组合来源
+

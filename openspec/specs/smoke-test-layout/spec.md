@@ -42,7 +42,16 @@
 - **当** 开发者需要检查一份现成 `TaskDraft` 会被 `dsl_node` 翻译成什么 `TaskDocument`
 - **那么** 可以直接在 `src/smoke/` 下找到独立的 `dsl_node` smoke 入口
 - **那么** 该入口必须与其他 smoke 脚本保持一致的目录语义
-- **那么** 该入口展示的最终 `TaskDocument` 必须来自 `dsl_node` 的结构化输出结果
+
+#### 场景:开发者观察 dsl_node repair 回路
+- **当** `dsl_node` smoke 入口在首轮生成后进入 lint-repair 回路
+- **那么** 脚本输出必须能让开发者观察是否触发了 repair
+- **那么** 脚本输出必须能让开发者观察最终轮次和最终 lint 结论
+
+#### 场景:开发者观察 dsl 到 engine 的执行结果
+- **当** `src/smoke/test_dsl.py` 生成的 `lint_result.status` 为 `valid`
+- **那么** 脚本输出必须继续展示执行阶段结果
+- **那么** 脚本输出必须继续展示关键 state 变化摘要，而不只是停在 DSL 与 lint
 
 ### 需求:dsl_node smoke 脚本必须默认读取 test_task_draft 样例
 系统必须让 `dsl_node` smoke 脚本默认读取仓库内的 `output/test_task_draft.json` 作为输入样例，禁止要求开发者每次运行时都必须手工构造内联 `TaskDraft` 或提供必填参数。
@@ -74,3 +83,4 @@
 - **当** `dsl_node` smoke 入口在首轮生成后进入 lint-repair 回路
 - **那么** 脚本输出必须能让开发者观察是否触发了 repair
 - **那么** 脚本输出必须能让开发者观察最终轮次和最终 lint 结论
+

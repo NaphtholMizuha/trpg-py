@@ -1,4 +1,4 @@
-## 新增需求
+## 修改需求
 
 ### 需求:task_node 默认 prompt 必须优先表达执行需求与证据缺口
 系统必须要求 `task_node` 的默认 prompt 以执行目标、关键前提、证据缺口和安全状态绑定为主线组织 `TaskDraft`。系统禁止继续把任务原型分类、分类介绍或 few-shot 原型覆盖当作 prompt 的主要推理入口。
@@ -29,8 +29,6 @@
 - **那么** prompt 必须把 `template` 描述为合法 shape 与常见骨架的参考工具
 - **那么** prompt 必须把 `lint` 描述为提交前诊断与收敛工具
 - **那么** prompt 不得暗示只有模板命中的固定任务族才允许组合 engine primitive
-
-## 修改需求
 
 ### 需求:task node 与 dsl node 必须使用不同的 prompt 文件
 系统必须为 `task_node` 与 `dsl_node` 使用不同的 prompt 文件，禁止两个节点默认共享同一个通用 prompt 文件。
