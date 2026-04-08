@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for src
     def activate_planner_runtime_guard():  # type: ignore[no-redef]
         return nullcontext()
 from tests.config_helpers import write_project_config
-from augury.planner.tools import HybridRuleSearcher, SearchResult, build_default_searcher, create_search_tool
+from augury.agent.tools import HybridRuleSearcher, SearchResult, build_default_searcher, create_search_tool
 from augury.config import clear_project_config_cache
 from augury.rag import OpenAIEmbedder, Retriever
 

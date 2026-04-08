@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from augury.planner.tools import create_lint_tool, lint_task_document
+from augury.agent.tools import create_lint_tool, lint_task_document
 
 
 class LintToolTests(unittest.TestCase):

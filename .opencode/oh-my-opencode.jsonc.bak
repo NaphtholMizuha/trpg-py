@@ -1,0 +1,122 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/dev/assets/oh-my-opencode.schema.json",
+
+  // 主编排器 - 使用 KAT-Coder-Pro-V2
+  "agents": {
+    "sisyphus": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.1
+    },
+
+    // 战略规划器 - 使用 KAT-Coder-Pro-V2
+    "prometheus": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.1
+    },
+
+    // 预规划顾问 - 使用 KAT-Coder-Pro-V2
+    "metis": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.3
+    },
+
+    // Todo编排器 - 使用 KAT-Coder-Pro-V2
+    "atlas": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.1
+    },
+
+    // 深度自主工作者 - 使用 GPT-5.4 (ChatGPT Plus)
+    "hephaestus": {
+      "model": "openai/gpt-5.4-codex",
+      "temperature": 0.1,
+      "reasoningEffort": "high"
+    },
+
+    // 架构顾问 - 使用 GPT-5.4 (ChatGPT Plus)
+    "oracle": {
+      "model": "openai/gpt-5.4",
+      "temperature": 0.1,
+      "thinking": {
+        "type": "enabled",
+        "budgetTokens": 200000
+      }
+    },
+
+    // 计划评审员 - 使用 GPT-5.4 (ChatGPT Plus)
+    "momus": {
+      "model": "openai/gpt-5.4",
+      "temperature": 0.1
+    },
+
+    // 外部文档搜索 - 使用快速模型
+    "librarian": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.1
+    },
+
+    // 代码库搜索 - 使用快速模型
+    "explore": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.1,
+      "textVerbosity": "low"
+    },
+
+    // 视觉任务分析 - 使用 KAT-Coder-Pro-V2
+    "multimodal-looker": {
+      "model": "kuaishou/KAT-Coder-Pro-V2",
+      "temperature": 0.1
+    }
+  },
+
+  // 领域特定模型委托
+  "categories": {
+    // 简单任务 - 使用 KAT-Coder-Pro-V2
+    "quick": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 中等复杂度任务 - 使用 KAT-Coder-Pro-V2
+    "unspecified-low": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 高复杂度任务 - 使用 KAT-Coder-Pro-V2
+    "unspecified-high": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 文档与写作 - 使用 KAT-Coder-Pro-V2
+    "writing": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 视觉任务 - 使用 KAT-Coder-Pro-V2
+    "visual-engineering": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 复杂问题解决 - 使用 KAT-Coder-Pro-V2
+    "artistry": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 深度逻辑推理 - 使用 KAT-Coder-Pro-V2
+    "ultrabrain": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    },
+
+    // 深度自主问题解决 - 使用 KAT-Coder-Pro-V2
+    "deep": {
+      "model": "kuaishou/KAT-Coder-Pro-V2"
+    }
+  },
+
+  // 后台任务并发限制
+  "background_task": {
+    "providerConcurrency": {
+      "kuaishou": 3,
+      "openai": 3
+    }
+  }
+}

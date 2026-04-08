@@ -8,7 +8,7 @@ from loguru import logger
 
 sys.path.insert(0, "src")
 
-from augury.planner.tools import create_grep_tool, grep_lines
+from augury.agent.tools import create_grep_tool, grep_lines
 
 
 class GrepToolTests(unittest.TestCase):

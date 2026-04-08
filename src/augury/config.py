@@ -29,10 +29,10 @@ class PlannerConfig(BaseModel):
     interrupt_on: dict[str, Any] = Field(default_factory=dict)
     max_planning_rounds: int = Field(ge=1)
     tool_budget: int = Field(ge=1)
-    prompt: "PlannerPromptConfig"
-    task_node_prompt: "PlannerNodePromptConfig"
-    dsl_node_prompt: "PlannerNodePromptConfig"
-    smoke: "PlannerSmokeConfig"
+    main_prompt: "PlannerPromptConfig"
+    context_agent_prompt: "PlannerNodePromptConfig"
+    resolution_agent_prompt: "PlannerNodePromptConfig"
+    evals: "PlannerEvalConfig"
 
 
 class PlannerPromptConfig(BaseModel):
@@ -46,7 +46,7 @@ class PlannerNodePromptConfig(BaseModel):
     user_file: str = Field(min_length=1)
 
 
-class PlannerSmokeConfig(BaseModel):
+class PlannerEvalConfig(BaseModel):
     world_state_file: str = Field(min_length=1)
 
 
@@ -183,10 +183,10 @@ def _read_required_env(env_name: str, *, section: str) -> str:
 __all__ = [
     "DEFAULT_PROJECT_CONFIG_PATH",
     "PROJECT_LEVEL_CONFIG_SECTIONS",
+    "PlannerEvalConfig",
     "PlannerConfig",
     "PlannerNodePromptConfig",
     "PlannerPromptConfig",
-    "PlannerSmokeConfig",
     "ProjectConfig",
     "ProjectConfigError",
     "SearchConfig",

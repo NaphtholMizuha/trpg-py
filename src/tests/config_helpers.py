@@ -14,27 +14,29 @@ def write_project_config(
     planner_interrupt_on: str = "{ human = true }",
     planner_max_planning_rounds: int = 3,
     planner_tool_budget: int = 7,
-    planner_prompt_directory: str = "prompts",
-    planner_prompt_system_file: str = "planner_system.txt",
-    planner_prompt_user_file: str = "planner_user.txt",
-    planner_system_prompt_template: str = "System prompt budget {{tool_budget}}",
-    planner_user_prompt_template: str = (
+    planner_main_prompt_directory: str = "prompts",
+    planner_main_prompt_system_file: str = "planner_system.txt",
+    planner_main_prompt_user_file: str = "planner_user.txt",
+    planner_main_system_prompt_template: str = "System prompt budget {{tool_budget}}",
+    planner_main_user_prompt_template: str = (
         "Instruction: {{instruction}}\n"
         "Context: {{context_json}}\n"
         "Policy: {{policy_json}}\n"
         "Budget: {{tool_budget}}\n"
         "Repair: {{validation_feedback}}"
     ),
-    planner_task_node_system_file: str = "planner_task_node_system.txt",
-    planner_task_node_user_file: str = "planner_task_node_user.txt",
-    planner_task_node_system_prompt_template: str = "Task node system prompt",
-    planner_task_node_user_prompt_template: str = "Task node user prompt: {{instruction}}",
-    planner_dsl_node_system_file: str = "planner_dsl_node_system.txt",
-    planner_dsl_node_user_file: str = "planner_dsl_node_user.txt",
-    planner_dsl_node_system_prompt_template: str = "DSL node system prompt",
-    planner_dsl_node_user_prompt_template: str = "DSL node user prompt: {{task_draft_json}}",
-    planner_smoke_world_state_file: str = "world_state.toml",
-    planner_smoke_world_state_template: str = (
+    planner_context_agent_system_file: str = "planner_context_agent_system.txt",
+    planner_context_agent_user_file: str = "planner_context_agent_user.txt",
+    planner_context_agent_system_prompt_template: str = "Context agent system prompt",
+    planner_context_agent_user_prompt_template: str = "Context agent user prompt: {{instruction}}",
+    planner_resolution_agent_system_file: str = "planner_resolution_agent_system.txt",
+    planner_resolution_agent_user_file: str = "planner_resolution_agent_user.txt",
+    planner_resolution_agent_system_prompt_template: str = "Resolution agent system prompt",
+    planner_resolution_agent_user_prompt_template: str = (
+        "Resolution agent user prompt: {{context_bundle_json}}"
+    ),
+    planner_evals_world_state_file: str = "world_state.toml",
+    planner_evals_world_state_template: str = (
         "[actors.goblin_1]\n"
         "id = \"goblin_1\"\n"
         "ac = 13\n"
@@ -63,77 +65,77 @@ def write_project_config(
     search_rerank_timeout: float = 17.0,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    prompt_dir = path.parent / planner_prompt_directory
+    prompt_dir = path.parent / planner_main_prompt_directory
     prompt_dir.mkdir(parents=True, exist_ok=True)
-    (prompt_dir / planner_prompt_system_file).write_text(
-        planner_system_prompt_template,
+    (prompt_dir / planner_main_prompt_system_file).write_text(
+        planner_main_system_prompt_template,
         encoding="utf-8",
     )
-    (prompt_dir / planner_prompt_user_file).write_text(
-        planner_user_prompt_template,
+    (prompt_dir / planner_main_prompt_user_file).write_text(
+        planner_main_user_prompt_template,
         encoding="utf-8",
     )
-    (prompt_dir / planner_task_node_system_file).write_text(
-        planner_task_node_system_prompt_template,
+    (prompt_dir / planner_context_agent_system_file).write_text(
+        planner_context_agent_system_prompt_template,
         encoding="utf-8",
     )
-    (prompt_dir / planner_task_node_user_file).write_text(
-        planner_task_node_user_prompt_template,
+    (prompt_dir / planner_context_agent_user_file).write_text(
+        planner_context_agent_user_prompt_template,
         encoding="utf-8",
     )
-    (prompt_dir / planner_dsl_node_system_file).write_text(
-        planner_dsl_node_system_prompt_template,
+    (prompt_dir / planner_resolution_agent_system_file).write_text(
+        planner_resolution_agent_system_prompt_template,
         encoding="utf-8",
     )
-    (prompt_dir / planner_dsl_node_user_file).write_text(
-        planner_dsl_node_user_prompt_template,
+    (prompt_dir / planner_resolution_agent_user_file).write_text(
+        planner_resolution_agent_user_prompt_template,
         encoding="utf-8",
     )
-    (path.parent / planner_smoke_world_state_file).write_text(
-        planner_smoke_world_state_template,
+    (path.parent / planner_evals_world_state_file).write_text(
+        planner_evals_world_state_template,
         encoding="utf-8",
     )
     path.write_text(
         f"""[planner]
-model = \"{planner_model}\"
-base_url = \"{planner_base_url}\"
-api_key_env = \"{planner_api_key_env}\"
+model = "{planner_model}"
+base_url = "{planner_base_url}"
+api_key_env = "{planner_api_key_env}"
 timeout = {planner_timeout}
 max_retries = {planner_max_retries}
 interrupt_on = {planner_interrupt_on}
 max_planning_rounds = {planner_max_planning_rounds}
 tool_budget = {planner_tool_budget}
 
-[planner.prompt]
-directory = "{planner_prompt_directory}"
-system_file = "{planner_prompt_system_file}"
-user_file = "{planner_prompt_user_file}"
+[planner.main_prompt]
+directory = "{planner_main_prompt_directory}"
+system_file = "{planner_main_prompt_system_file}"
+user_file = "{planner_main_prompt_user_file}"
 
-[planner.task_node_prompt]
-system_file = "{planner_task_node_system_file}"
-user_file = "{planner_task_node_user_file}"
+[planner.context_agent_prompt]
+system_file = "{planner_context_agent_system_file}"
+user_file = "{planner_context_agent_user_file}"
 
-[planner.dsl_node_prompt]
-system_file = "{planner_dsl_node_system_file}"
-user_file = "{planner_dsl_node_user_file}"
+[planner.resolution_agent_prompt]
+system_file = "{planner_resolution_agent_system_file}"
+user_file = "{planner_resolution_agent_user_file}"
 
-[planner.smoke]
-world_state_file = "{planner_smoke_world_state_file}"
+[planner.evals]
+world_state_file = "{planner_evals_world_state_file}"
 
 [search.api]
-base_url = \"{search_base_url}\"
-api_key_env = \"{search_api_key_env}\"
+base_url = "{search_base_url}"
+api_key_env = "{search_api_key_env}"
 
 [search.models]
-dense_embedding = \"{search_dense_embedding}\"
-sparse_embedding = \"{search_sparse_embedding}\"
-reranker = \"{search_reranker}\"
+dense_embedding = "{search_dense_embedding}"
+sparse_embedding = "{search_sparse_embedding}"
+reranker = "{search_reranker}"
 
 [search.qdrant]
-url = \"{search_qdrant_url}\"
-collection_name = \"{search_collection_name}\"
-dense_vector_name = \"{search_dense_vector_name}\"
-sparse_vector_name = \"{search_sparse_vector_name}\"
+url = "{search_qdrant_url}"
+collection_name = "{search_collection_name}"
+dense_vector_name = "{search_dense_vector_name}"
+sparse_vector_name = "{search_sparse_vector_name}"
 
 [search]
 default_limit = {search_default_limit}

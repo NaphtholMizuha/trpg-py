@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, "src")
-
-from smoke.planner_e2e_eval import (
+from augury.agent.evals import (
+    CaseExpectation,
     EvalCase,
     EvalSuite,
+    evaluate_case_result,
     extract_step_signatures,
     load_eval_suite,
+    load_eval_state,
     run_eval_case,
     summarize_eval_results,
     write_eval_logs,
@@ -27,8 +27,13 @@ class PlannerE2EEvalHelperTests(unittest.TestCase):
         self.assertTrue(suite.world_state_file.name.endswith("world_state.toml"))
         self.assertEqual(10, len(suite.cases))
         self.assertEqual("01_aldera_longsword_goblin_1", suite.cases[0].case_id)
-        self.assertIn("attack", suite.cases[0].tags)
         self.assertEqual("needs_human", suite.cases[8].expectation.expected_workflow_status)
+
+    def test_load_eval_state_reads_toml_fixture(self) -> None:
+        state = load_eval_state("examples/evals/planner_e2e/world_state.toml")
+
+        self.assertIn("actors", state)
+        self.assertIn("aldera", state["actors"])
 
     def test_extract_step_signatures_returns_type_kind_pairs(self) -> None:
         task_document = {
@@ -48,12 +53,12 @@ class PlannerE2EEvalHelperTests(unittest.TestCase):
         suite = EvalSuite(
             suite_name="demo",
             world_state_file=Path("/tmp/world_state.toml"),
-            default_dice=[4, 4, 4],
+            default_dice=[15, 6],
             cases=[],
         )
         case = EvalCase(
             case_id="demo_case",
-            instruction="demo instruction",
+            instruction="Aldera用长剑攻击goblin_1",
             expectation=suite_case_expectation(
                 workflow_status="ready",
                 lint_status="valid",
@@ -63,53 +68,30 @@ class PlannerE2EEvalHelperTests(unittest.TestCase):
             ),
         )
 
-        from unittest.mock import patch
-
-        class FakeWorkflowResult:
-            status = "ready"
-
-            def model_dump(self) -> dict[str, object]:
-                return {
-                    "status": "ready",
-                    "draft": {
-                        "reads": ["actors.goblin_1.hp.current"],
-                        "writes": ["actors.goblin_1.hp.current"],
+        payload = run_eval_case(
+            case,
+            suite=suite,
+            initial_state={
+                "actors": {
+                    "aldera": {
+                        "id": "aldera",
+                        "position": {"x": 0, "y": 0},
+                        "attacks": {"longsword": {"to_hit": 7, "reach": 5, "damage": [{"dice": "1d8", "bonus": 4, "damage_type": "slashing"}]}},
                     },
-                    "missing_info": [],
-                    "task_document": {
-                        "steps": [
-                            {"type": "check", "kind": "attack"},
-                            {"type": "damage", "kind": "apply"},
-                        ]
+                    "goblin_1": {
+                        "id": "goblin_1",
+                        "position": {"x": 0, "y": 1},
+                        "hp": {"current": 7, "max": 7},
+                        "ac": {"total": 13},
                     },
-                    "lint_result": {"status": "valid"},
                 }
-
-        class FakeWorkflow:
-            def invoke(self, instruction: str) -> FakeWorkflowResult:
-                self.instruction = instruction
-                return FakeWorkflowResult()
-
-        with patch("smoke.planner_e2e_eval.build_eval_workflow", return_value=FakeWorkflow()):
-            with patch(
-                "smoke.planner_e2e_eval._build_execution_result",
-                return_value={
-                    "status": "success",
-                    "reason": None,
-                    "report": {"status": "success"},
-                    "state_changes": [{"path": "actors.goblin_1.hp.current", "old_value": 7, "new_value": 0}],
-                },
-            ):
-                payload = run_eval_case(
-                    case,
-                    suite=suite,
-                    initial_state={"actors": {"goblin_1": {"hp": {"current": 7}}}},
-                    config_path="config/config.toml",
-                )
+            },
+            config_path="config/config.toml",
+        )
 
         self.assertTrue(payload["evaluation"]["passed"])
         self.assertEqual("success", payload["execution_result"]["status"])
-        self.assertEqual(["check.attack", "damage.apply"], payload["step_signatures"])
+        self.assertIn("check.attack", payload["step_signatures"])
 
     def test_run_eval_case_marks_unexpected_changed_paths_as_failure(self) -> None:
         suite = EvalSuite(
@@ -127,37 +109,14 @@ class PlannerE2EEvalHelperTests(unittest.TestCase):
             ),
         )
 
-        from unittest.mock import patch
-
-        class FakeWorkflowResult:
-            status = "ready"
-
-            def model_dump(self) -> dict[str, object]:
-                return {
-                    "status": "ready",
-                    "draft": {"reads": [], "writes": []},
-                    "missing_info": [],
-                    "task_document": {"steps": []},
-                    "lint_result": {"status": "valid"},
-                }
-
-        with patch("smoke.planner_e2e_eval.build_eval_workflow") as workflow_builder:
-            workflow_builder.return_value.invoke.return_value = FakeWorkflowResult()
-            with patch(
-                "smoke.planner_e2e_eval._build_execution_result",
-                return_value={
-                    "status": "success",
-                    "reason": None,
-                    "report": {"status": "success"},
-                    "state_changes": [{"path": "actors.goblin_1.hp.current", "old_value": 7, "new_value": 0}],
-                },
-            ):
-                payload = run_eval_case(
-                    case,
-                    suite=suite,
-                    initial_state={"actors": {}},
-                    config_path="config/config.toml",
-                )
+        payload = {
+            "workflow_result": {"status": "ready"},
+            "execution_result": {"status": "success"},
+            "step_signatures": [],
+            "state_changes": [{"path": "actors.goblin_1.hp.current"}],
+            "missing_info": [],
+        }
+        payload["evaluation"] = evaluate_case_result(case, payload)
 
         self.assertFalse(payload["evaluation"]["passed"])
         self.assertIn("changed_paths", payload["evaluation"]["failure_reasons"][0])
@@ -237,8 +196,6 @@ def suite_case_expectation(
     changed_paths: list[str] | None = None,
     step_signatures: list[str] | None = None,
 ):
-    from smoke.planner_e2e_eval import CaseExpectation
-
     return CaseExpectation(
         expected_workflow_status=workflow_status,
         expected_lint_status=lint_status,

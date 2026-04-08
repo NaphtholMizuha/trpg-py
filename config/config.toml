@@ -16,20 +16,20 @@ interrupt_on = {}
 max_planning_rounds = 2
 tool_budget = 10
 
-[planner.prompt]
+[planner.main_prompt]
 directory = "prompts"
 system_file = "planner_system.txt"
 user_file = "planner_user.txt"
 
-[planner.task_node_prompt]
-system_file = "planner_task_node_system.txt"
-user_file = "planner_task_node_user.txt"
+[planner.context_agent_prompt]
+system_file = "planner_context_agent_system.txt"
+user_file = "planner_context_agent_user.txt"
 
-[planner.dsl_node_prompt]
-system_file = "planner_dsl_node_system.txt"
-user_file = "planner_dsl_node_user.txt"
+[planner.resolution_agent_prompt]
+system_file = "planner_resolution_agent_system.txt"
+user_file = "planner_resolution_agent_user.txt"
 
-[planner.smoke]
+[planner.evals]
 world_state_file = "world_state.toml"
 
 [search.api]

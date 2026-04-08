@@ -113,32 +113,18 @@
 - **那么** search 通过统一配置入口读取对应字段
 - **那么** search 模块不再自行解析独立环境变量集合
 
-### 需求: search 工具必须提供可手动运行的集成测试脚本
-系统必须提供一个位于 `smoke/test_search.py` 的可手动运行脚本，用于让开发者直接验证 search 工具的真实检索效果，而不是只依赖自动化测试或底层客户端调用。该脚本的人类可读输出必须优先展示当前知识库的来源字段和章节路径，便于开发者核对命中是否与 `rag.md` 中定义的 schema 一致。
-
-#### 场景:开发者手动验证 search 效果
-- **当** 开发者在本地执行 `smoke/test_search.py` 并提供 query 或其他参数
-- **那么** 脚本调用系统现有 search 能力完成一次检索
-- **那么** 输出中可以观察命中、无命中或错误等结构化结果
-
-#### 场景:smoke 输出展示当前知识库来源字段
-- **当** `smoke/test_search.py` 以人类可读模式打印命中结果
-- **那么** 输出必须能够展示 `title`、`doc_type`、`book`、`path`
-- **那么** 输出必须在存在时展示 `section_titles`
-- **那么** 输出不得继续只依赖 `file`、`locator`、`type` 等旧字段作为主要来源摘要
-
 ### 需求: search 返回语义必须可直接驱动 planner 分支决策
-系统必须保证 `search` 的 `ok/no_match/error` 三类返回语义稳定可区分，供 planner 直接判定“规则证据充分”“规则证据不足”或“检索故障”，禁止将不同结果折叠为同一空结果。
+系统必须保证 `search` 的 `ok`、`no_match` 和 `error` 三类返回语义稳定可区分，供 Context Agent 与主 agent 直接判定“规则证据充分”“规则证据不足”或“检索故障”。系统禁止将不同结果折叠为同一空结果。
 
-#### 场景:planner 根据 no_match 识别规则证据不足
-- **当** planner 提交合法 query 且 `search` 返回 `status=no_match`
-- **那么** planner 可以将该结果解释为规则证据不足
-- **那么** planner 可以转入 `needs_human` 或回退策略
+#### 场景:Context Agent 根据 no_match 识别规则证据不足
+- **当** Context Agent 提交合法 query 且 `search` 返回 `status=no_match`
+- **那么** Context Agent 可以将该结果解释为规则证据不足
+- **那么** 主 agent 可以据此决定继续补充上下文或返回 `needs_human`
 
-#### 场景:planner 根据 error 识别检索故障
+#### 场景:Context Agent 根据 error 识别检索故障
 - **当** `search` 返回 `status=error`
-- **那么** planner 可以将该结果解释为检索链路故障
-- **那么** planner 可以进入 `blocked` 或恢复流程
+- **那么** Context Agent 可以将该结果解释为检索链路故障
+- **那么** 主 agent 可以进入 `blocked` 或恢复流程
 
 ### 需求: search 工具每次调用必须使用 loguru 记录输入和输出
 系统必须要求 `search` 工具在每次调用时通过 `loguru` 记录调用输入、输出状态和错误信息，禁止只在调用方脚本中临时打印或完全不留运行期日志。
@@ -188,4 +174,12 @@
 - **当** 调用方向 `search` 发起带有 `mode` 的检索且返回 `no_match` 或 `error`
 - **那么** 系统必须记录本次调用使用的 `mode`
 - **那么** 调试人员必须能够从日志中区分这是术语检索、平衡检索还是语义检索
+
+### 需求:search 返回结果必须可直接作为 Context Agent 的规则证据输入
+系统必须保证 `search` 的返回结构足够稳定，使 Context Agent 可以直接将命中结果整理为规则证据，而不是先把返回值降格为自由文本再二次解析。
+
+#### 场景:Context Agent 消费 search 结果
+- **当** Context Agent 调用 `search` 获取规则原文
+- **那么** 返回结果必须保留原始命中文本和必要元数据
+- **那么** Context Agent 可以直接基于这些字段构造高信息密度规则证据
 

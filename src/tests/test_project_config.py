@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.config_helpers import write_project_config
 from augury.config import (
     PROJECT_LEVEL_CONFIG_SECTIONS,
     ProjectConfigError,
@@ -16,6 +15,7 @@ from augury.config import (
     load_project_config,
     resolve_path_from_config,
 )
+from tests.config_helpers import write_project_config
 
 
 class ProjectConfigTests(unittest.TestCase):
@@ -37,13 +37,19 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual("openai:test-planner", first.planner.model)
         self.assertEqual("planner-key", first.planner.api_key)
-        self.assertEqual("prompts", first.planner.prompt.directory)
-        self.assertEqual("planner_system.txt", first.planner.prompt.system_file)
-        self.assertEqual("planner_task_node_system.txt", first.planner.task_node_prompt.system_file)
-        self.assertEqual("planner_task_node_user.txt", first.planner.task_node_prompt.user_file)
-        self.assertEqual("planner_dsl_node_system.txt", first.planner.dsl_node_prompt.system_file)
-        self.assertEqual("planner_dsl_node_user.txt", first.planner.dsl_node_prompt.user_file)
-        self.assertEqual("world_state.toml", first.planner.smoke.world_state_file)
+        self.assertEqual("prompts", first.planner.main_prompt.directory)
+        self.assertEqual("planner_system.txt", first.planner.main_prompt.system_file)
+        self.assertEqual("planner_context_agent_system.txt", first.planner.context_agent_prompt.system_file)
+        self.assertEqual("planner_context_agent_user.txt", first.planner.context_agent_prompt.user_file)
+        self.assertEqual(
+            "planner_resolution_agent_system.txt",
+            first.planner.resolution_agent_prompt.system_file,
+        )
+        self.assertEqual(
+            "planner_resolution_agent_user.txt",
+            first.planner.resolution_agent_prompt.user_file,
+        )
+        self.assertEqual("world_state.toml", first.planner.evals.world_state_file)
         self.assertEqual("https://search.example/v1", first.search.api.base_url)
         self.assertEqual("search-key", first.search.api.api_key)
         self.assertEqual("rules", first.search.qdrant.collection_name)
@@ -58,33 +64,160 @@ class ProjectConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.toml"
             config_path.write_text(
-                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = \"oops\"\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.prompt]\ndirectory = \"prompts\"\nsystem_file = \"planner_system.txt\"\nuser_file = \"planner_user.txt\"\n\n[planner.task_node_prompt]\nsystem_file = \"planner_task_node_system.txt\"\nuser_file = \"planner_task_node_user.txt\"\n\n[planner.dsl_node_prompt]\nsystem_file = \"planner_dsl_node_system.txt\"\nuser_file = \"planner_dsl_node_user.txt\"\n\n[planner.smoke]\nworld_state_file = \"world_state.toml\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
+                """[planner]
+model = "openai:test"
+base_url = "https://planner.example/v1"
+api_key_env = "PLANNER_API_KEY"
+timeout = 42
+max_retries = "oops"
+interrupt_on = {}
+max_planning_rounds = 2
+tool_budget = 4
+
+[planner.main_prompt]
+directory = "prompts"
+system_file = "planner_system.txt"
+user_file = "planner_user.txt"
+
+[planner.context_agent_prompt]
+system_file = "planner_context_agent_system.txt"
+user_file = "planner_context_agent_user.txt"
+
+[planner.resolution_agent_prompt]
+system_file = "planner_resolution_agent_system.txt"
+user_file = "planner_resolution_agent_user.txt"
+
+[planner.evals]
+world_state_file = "world_state.toml"
+
+[search.api]
+base_url = "https://search.example/v1"
+api_key_env = "SEARCH_API_KEY"
+
+[search.models]
+dense_embedding = "dense"
+sparse_embedding = "sparse"
+reranker = "reranker"
+
+[search.qdrant]
+url = "http://qdrant.example:6333"
+collection_name = "rules"
+dense_vector_name = "dense"
+sparse_vector_name = "sparse"
+
+[search]
+default_limit = 4
+default_fetch_k = 11
+rerank_timeout = 17.0
+""",
                 encoding="utf-8",
             )
 
             with self.assertRaisesRegex(ProjectConfigError, "max_retries"):
                 load_project_config(config_path)
 
-    def test_load_project_config_raises_when_prompt_section_is_missing(self) -> None:
+    def test_load_project_config_raises_when_main_prompt_section_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.toml"
             config_path.write_text(
-                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = 4\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.smoke]\nworld_state_file = \"world_state.toml\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
+                """[planner]
+model = "openai:test"
+base_url = "https://planner.example/v1"
+api_key_env = "PLANNER_API_KEY"
+timeout = 42
+max_retries = 4
+interrupt_on = {}
+max_planning_rounds = 2
+tool_budget = 4
+
+[planner.context_agent_prompt]
+system_file = "planner_context_agent_system.txt"
+user_file = "planner_context_agent_user.txt"
+
+[planner.resolution_agent_prompt]
+system_file = "planner_resolution_agent_system.txt"
+user_file = "planner_resolution_agent_user.txt"
+
+[planner.evals]
+world_state_file = "world_state.toml"
+
+[search.api]
+base_url = "https://search.example/v1"
+api_key_env = "SEARCH_API_KEY"
+
+[search.models]
+dense_embedding = "dense"
+sparse_embedding = "sparse"
+reranker = "reranker"
+
+[search.qdrant]
+url = "http://qdrant.example:6333"
+collection_name = "rules"
+dense_vector_name = "dense"
+sparse_vector_name = "sparse"
+
+[search]
+default_limit = 4
+default_fetch_k = 11
+rerank_timeout = 17.0
+""",
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ProjectConfigError, "prompt"):
+            with self.assertRaisesRegex(ProjectConfigError, "main_prompt"):
                 load_project_config(config_path)
 
-    def test_load_project_config_raises_when_smoke_section_is_missing(self) -> None:
+    def test_load_project_config_raises_when_evals_section_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.toml"
             config_path.write_text(
-                """[planner]\nmodel = \"openai:test\"\nbase_url = \"https://planner.example/v1\"\napi_key_env = \"PLANNER_API_KEY\"\ntimeout = 42\nmax_retries = 4\ninterrupt_on = {}\nmax_planning_rounds = 2\ntool_budget = 4\n\n[planner.prompt]\ndirectory = \"prompts\"\nsystem_file = \"planner_system.txt\"\nuser_file = \"planner_user.txt\"\n\n[planner.task_node_prompt]\nsystem_file = \"planner_task_node_system.txt\"\nuser_file = \"planner_task_node_user.txt\"\n\n[planner.dsl_node_prompt]\nsystem_file = \"planner_dsl_node_system.txt\"\nuser_file = \"planner_dsl_node_user.txt\"\n\n[search.api]\nbase_url = \"https://search.example/v1\"\napi_key_env = \"SEARCH_API_KEY\"\n\n[search.models]\ndense_embedding = \"dense\"\nsparse_embedding = \"sparse\"\nreranker = \"reranker\"\n\n[search.qdrant]\nurl = \"http://qdrant.example:6333\"\ncollection_name = \"rules\"\ndense_vector_name = \"dense\"\nsparse_vector_name = \"sparse\"\n\n[search]\ndefault_limit = 4\ndefault_fetch_k = 11\nrerank_timeout = 17.0\n""",
+                """[planner]
+model = "openai:test"
+base_url = "https://planner.example/v1"
+api_key_env = "PLANNER_API_KEY"
+timeout = 42
+max_retries = 4
+interrupt_on = {}
+max_planning_rounds = 2
+tool_budget = 4
+
+[planner.main_prompt]
+directory = "prompts"
+system_file = "planner_system.txt"
+user_file = "planner_user.txt"
+
+[planner.context_agent_prompt]
+system_file = "planner_context_agent_system.txt"
+user_file = "planner_context_agent_user.txt"
+
+[planner.resolution_agent_prompt]
+system_file = "planner_resolution_agent_system.txt"
+user_file = "planner_resolution_agent_user.txt"
+
+[search.api]
+base_url = "https://search.example/v1"
+api_key_env = "SEARCH_API_KEY"
+
+[search.models]
+dense_embedding = "dense"
+sparse_embedding = "sparse"
+reranker = "reranker"
+
+[search.qdrant]
+url = "http://qdrant.example:6333"
+collection_name = "rules"
+dense_vector_name = "dense"
+sparse_vector_name = "sparse"
+
+[search]
+default_limit = 4
+default_fetch_k = 11
+rerank_timeout = 17.0
+""",
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ProjectConfigError, "smoke"):
+            with self.assertRaisesRegex(ProjectConfigError, "evals"):
                 load_project_config(config_path)
 
     def test_load_project_config_raises_for_missing_api_key_env_value(self) -> None:

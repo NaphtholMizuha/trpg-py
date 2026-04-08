@@ -1,0 +1,14 @@
+Intent: {{instruction}}
+Goal: 为后续 resolution 收集与该意图直接相关的规则证据、状态证据和缺口。
+Requests:
+- 识别这条意图中的执行者对应哪个实体；如果不能唯一定位，明确指出歧义或缺失。
+- 识别这条意图中的目标对应哪个实体；如果匹配多个候选，列出候选并说明为什么仍不唯一。
+- 检索与该动作结算直接相关的规则证据，优先保留能支持后续 resolution 的关键条文。
+
+不要把 requests 写成字段名列表，例如 `caster_id` 或 `target_id`。
+不要把 requests 写成问句列表，例如 “施法者是谁？”。
+你必须自己判断当前证据是否已经足够安全 grounding；是否发起 ask 必须由你的推理决定，而不是机械地因为看到 actor、target、position 等缺口就立刻提问。
+当你已经能把问题收敛成明确的 DM 澄清请求时，优先产出结构化 `ask_requests`，并给出选项、默认值和自定义输入入口。
+如果现有证据仍允许你继续收集规则或状态证据，优先继续取证；只有在缺口已经阻止你安全落地时，才发起 ask。
+只有在问题还无法收敛成明确 ask 时，才保留内部备注或错误说明。
+Return high-density rule and state evidence, plus ask_requests when the intent cannot be grounded safely.

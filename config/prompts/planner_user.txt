@@ -159,6 +159,25 @@ Tool-path example before writing the final TaskDocument:
 - read paths: ["actors.goblin_1.attacks.scimitar.to_hit", "actors.aldera.ac", "actors.goblin_1.ac"]
 - final TaskDocument refs: {"$ref": "state.actors.goblin_1.attacks.scimitar.to_hit"} and {"$ref": "state.actors.aldera.ac"}
 
+When delegating to the Context Agent first, shape the request as:
+{
+  "intent": "{{instruction}}",
+  "goal": "One sentence describing why context is needed for downstream resolution.",
+  "requests": [
+    "自然语言事实获取请求 1",
+    "自然语言事实获取请求 2"
+  ]
+}
+
+Requests examples:
+- "识别这条意图中的执行者对应哪个实体；如果不能唯一定位，明确指出歧义或缺失。"
+- "检索与该法术结算直接相关的规则证据，优先保留能支持后续 resolution 的关键条文。"
+
+Requests anti-examples:
+- "caster_id"
+- "target_id"
+- "施法者是谁？"
+
 DM instruction:
 {{instruction}}
 
