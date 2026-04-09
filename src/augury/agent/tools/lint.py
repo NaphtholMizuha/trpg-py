@@ -6,8 +6,8 @@ from langchain_core.tools import BaseTool
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
-from augury.planner.dsl_shape_catalog import build_expected_shape
-from augury.planner.task_document import validate_candidate_task_document
+from augury.engine.core.dsl_shape_catalog import build_expected_shape
+from augury.engine.core.task_document import validate_candidate_task_document
 from augury.errors import ValidationError
 
 

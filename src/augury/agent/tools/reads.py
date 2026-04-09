@@ -7,7 +7,7 @@ from langchain_core.tools import BaseTool
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from augury.planner.tools.path_suggestions import merge_suggestions, suggest_paths
+from augury.agent.tools.path_suggestions import merge_suggestions, suggest_paths
 from augury.errors import StatePathError
 from augury.store import keys as list_state_keys
 from augury.store import read, reads as batch_read

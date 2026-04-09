@@ -149,7 +149,7 @@ class LintToolTests(unittest.TestCase):
     def test_lint_tool_reports_tool_errors_separately(self) -> None:
         tool = create_lint_tool()
 
-        with patch("augury.planner.tools.lint.lint_task_document", side_effect=RuntimeError("lint backend failed")):
+        with patch("augury.agent.tools.lint.lint_task_document", side_effect=RuntimeError("lint backend failed")):
             payload = tool.invoke(
                 {
                     "task_document": {

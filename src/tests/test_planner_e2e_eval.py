@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from augury.agent.evals import (
+from augury.agent.utils.evals import (
     CaseExpectation,
     EvalCase,
     EvalSuite,

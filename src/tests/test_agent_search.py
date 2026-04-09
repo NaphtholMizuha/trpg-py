@@ -12,7 +12,7 @@ from unittest.mock import patch
 from loguru import logger
 
 try:
-    from augury.agent.planner_runtime_guards import activate_planner_runtime_guard
+    from augury.agent.utils.planner_runtime_guards import activate_planner_runtime_guard
 except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for src-layout test runs
     def activate_planner_runtime_guard():  # type: ignore[no-redef]
         return nullcontext()

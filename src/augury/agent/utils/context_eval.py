@@ -5,15 +5,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from augury.agent.cli_ask import prompt_for_ask_requests
+from augury.agent.orchestrate import PlannerDependencies, build_context_agent_payload, create_planner
 from augury.agent.models import AskRequest, AskResponse, ContextBundle, PlannerRequest
-from augury.agent.runtime import PlannerDependencies, build_context_agent_payload, create_planner
-from augury.agent.state_loader import load_toml_state
+from augury.agent.utils.cli_ask import prompt_for_ask_requests
+from augury.agent.utils.state_loader import load_toml_state
 
 
 DEFAULT_CONTEXT_AGENT_EVAL_INTENT = "Aldera用火球术攻击goblin_1"
 DEFAULT_CONTEXT_AGENT_EVAL_STATE_FILE = (
-    Path(__file__).resolve().parents[3] / "examples" / "evals" / "planner_e2e" / "world_state.toml"
+    Path(__file__).resolve().parents[4] / "examples" / "evals" / "planner_e2e" / "world_state.toml"
 )
 
 
@@ -125,6 +125,8 @@ def _render_human_context_agent_eval(result: ContextAgentEvalResult) -> str:
         "",
         _render_ask_section(result.interrupt_requests or result.bundle.ask_requests),
         "",
+        _render_trace_section(list(result.bundle.notes)),
+        "",
         _render_text_list("notes", list(result.bundle.notes)),
     ]
     if result.ask_interaction_message:
@@ -211,6 +213,17 @@ def _render_ask_response_section(items: list[AskResponse]) -> str:
     for item in items:
         answer = item.custom_input if item.custom_input is not None else item.selected_option_id or "<none>"
         lines.append(f"- {item.question_id}: {answer}")
+    return "\n".join(lines)
+
+
+def _render_trace_section(items: list[str]) -> str:
+    trace_items = [item for item in items if item.startswith("trace:")]
+    lines = [f"agent_trace ({len(trace_items)})"]
+    if not trace_items:
+        lines.append("- <none>")
+        return "\n".join(lines)
+    for item in trace_items:
+        lines.append(f"- {item}")
     return "\n".join(lines)
 
 

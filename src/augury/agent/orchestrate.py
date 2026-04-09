@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from langchain_openai import ChatOpenAI
+
 from augury.agent.models import AskRequest, AskResponse, ContextBundle, ErrorInfo, PlannerRequest, PlannerResult, ResolutionBundle
 from augury.agent.subagents.context_agent import ContextAgent, ContextAgentDependencies
 from augury.agent.subagents.resolution_agent import ResolutionAgent, ResolutionAgentDependencies
@@ -15,7 +17,8 @@ from augury.agent.tools.orchestration import (
     create_load_skills_tool,
 )
 from augury.agent.tools.search_stub import create_search_stub_tool
-from augury.planner.tools import create_grep_tool, create_lint_tool, create_search_tool
+from augury.config import load_project_config, resolve_path_from_config
+from augury.agent.tools import create_grep_tool, create_lint_tool, create_search_tool
 
 
 @dataclass(slots=True)
@@ -26,6 +29,10 @@ class PlannerDependencies:
     search_tool: Any | None = None
     lint_tool: Any | None = None
     execute_tool: ExecuteTool | None = None
+    context_agent_model: Any | None = None
+    context_agent_system_prompt: str | None = None
+    context_agent_user_prompt: str | None = None
+    context_agent_agent_factory: Callable[..., Any] | None = None
     context_agent: ContextAgent | None = None
     resolution_agent: ResolutionAgent | None = None
 
@@ -109,12 +116,27 @@ class PlannerAgent:
             state_provider=self._state_provider,
             roller=roller,
         )
+        context_model, context_model_error = _build_context_agent_model(
+            config_path=config_path,
+            model_override=self.dependencies.context_agent_model,
+        )
+        context_system_prompt, context_user_prompt, context_prompt_error = _load_context_agent_prompts(
+            config_path=config_path,
+            system_override=self.dependencies.context_agent_system_prompt,
+            user_override=self.dependencies.context_agent_user_prompt,
+        )
+        llm_error = _merge_context_agent_errors(context_model_error, context_prompt_error)
 
         self.context_agent = self.dependencies.context_agent or ContextAgent(
             ContextAgentDependencies(
                 grep_tool=self.grep_tool,
                 search_tool=self.search_tool,
                 ask_tool=self.ask_tool,
+                model=context_model,
+                system_prompt=context_system_prompt,
+                user_prompt=context_user_prompt,
+                agent_factory=self.dependencies.context_agent_agent_factory,
+                llm_error=llm_error,
                 state_provider=self._state_provider,
             )
         )
@@ -285,6 +307,63 @@ def _build_safe_search_tool(*, config_path: str | None) -> Any:
         return create_search_tool(config_path=config_path)
     except Exception as exc:
         return create_search_stub_tool(reason=f"{exc.__class__.__name__}: {exc}")
+
+
+def _build_context_agent_model(
+    *,
+    config_path: str | None,
+    model_override: Any | None,
+) -> tuple[Any | None, str | None]:
+    if model_override is not None:
+        return model_override, None
+    try:
+        project_config = load_project_config(config_path)
+    except Exception as exc:
+        return None, f"{exc.__class__.__name__}: {exc}"
+    return (
+        ChatOpenAI(
+            model=project_config.planner.model,
+            api_key=project_config.planner.api_key,
+            base_url=project_config.planner.base_url,
+            timeout=project_config.planner.timeout,
+            max_retries=project_config.planner.max_retries,
+        ),
+        None,
+    )
+
+
+def _load_context_agent_prompts(
+    *,
+    config_path: str | None,
+    system_override: str | None,
+    user_override: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    if system_override is not None and user_override is not None:
+        return system_override, user_override, None
+    try:
+        project_config = load_project_config(config_path)
+    except Exception as exc:
+        if system_override is not None or user_override is not None:
+            return system_override, user_override, None
+        return system_override, user_override, f"{exc.__class__.__name__}: {exc}"
+    prompt_dir = resolve_path_from_config(project_config.planner.main_prompt.directory, config_path=config_path)
+    system_prompt = system_override
+    user_prompt = user_override
+    try:
+        if system_prompt is None:
+            system_prompt = (prompt_dir / project_config.planner.context_agent_prompt.system_file).read_text(encoding="utf-8")
+        if user_prompt is None:
+            user_prompt = (prompt_dir / project_config.planner.context_agent_prompt.user_file).read_text(encoding="utf-8")
+    except Exception as exc:
+        return system_prompt, user_prompt, f"{exc.__class__.__name__}: {exc}"
+    return system_prompt, user_prompt, None
+
+
+def _merge_context_agent_errors(*errors: str | None) -> str | None:
+    parts = [item for item in errors if item]
+    if not parts:
+        return None
+    return "; ".join(parts)
 
 
 def _build_context_goal(instruction: str) -> str:

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
+
 from augury.agent.models import AskRequest, AskResponse, Citation, ContextBundle, ErrorInfo, EvidenceItem, PendingInterrupt
-from augury.agent.tools.ask import AskInterrupt
+from augury.agent.tools.ask import AskInput, AskInterrupt, AskTool
+from augury.agent.tools.grep import GrepInput
+from augury.agent.tools.search import SearchInput
 
 
 @dataclass(slots=True)
@@ -14,6 +21,11 @@ class ContextAgentDependencies:
     grep_tool: Any
     search_tool: Any
     ask_tool: Any
+    model: Any | None = None
+    system_prompt: str | None = None
+    user_prompt: str | None = None
+    agent_factory: Callable[..., Any] | None = None
+    llm_error: str | None = None
     state_provider: Callable[[], dict[str, Any]] | None = None
 
 
@@ -22,6 +34,91 @@ class ContextAgent:
         self.dependencies = dependencies
 
     def run(self, payload: dict[str, Any]) -> ContextBundle:
+        if self._can_use_llm():
+            return self._run_llm(payload)
+        return self._run_heuristic(payload, fallback_reason=self.dependencies.llm_error)
+
+    def _can_use_llm(self) -> bool:
+        return (
+            self.dependencies.model is not None
+            and self.dependencies.system_prompt is not None
+            and self.dependencies.user_prompt is not None
+        )
+
+    def _run_llm(self, payload: dict[str, Any]) -> ContextBundle:
+        intent = str(payload.get("intent", ""))
+        goal = _normalize_text(payload.get("goal", ""))
+        requests = _normalize_requests(payload.get("requests"))
+        normalized_intent = _normalize_text(intent)
+        responses = _normalize_ask_responses(payload.get("ask_responses"))
+        response_map = {item.question_id: item for item in responses}
+        artifacts = _ContextAgentArtifacts()
+
+        try:
+            final_response = self._invoke_llm_agent(
+                intent=intent,
+                goal=goal,
+                requests=requests,
+                response_map=response_map,
+                artifacts=artifacts,
+            )
+        except AskInterrupt as interrupt:
+            pending_request = interrupt.request
+            analysis = _analyze_intent(normalized_intent, self._resolve_state(), overrides=_build_analysis_overrides(response_map))
+            notes = list(analysis["notes"]) + list(artifacts.trace)
+            if goal:
+                notes.append(f"goal={goal}")
+            if requests:
+                notes.append(f"requests={len(requests)}")
+            return ContextBundle(
+                status="needs_human",
+                instruction=intent,
+                normalized_instruction=normalized_intent,
+                action=analysis["action"],
+                resolved_entities=analysis["resolved_entities"],
+                derived_context=analysis["derived_context"],
+                rule_evidence=list(artifacts.rule_evidence),
+                state_evidence=list(artifacts.state_evidence),
+                citations=list(artifacts.citations),
+                ask_requests=[pending_request],
+                ask_responses=list(artifacts.ask_responses),
+                pending_interrupt=PendingInterrupt(tool_name="ask", request=pending_request),
+                notes=notes,
+            )
+        except Exception as exc:  # pragma: no cover - defensive safety net
+            fallback = self._run_heuristic(payload, fallback_reason=f"{exc.__class__.__name__}: {exc}")
+            fallback.notes.insert(0, "fallback=heuristic")
+            return fallback
+
+        notes = list(final_response.notes) + list(artifacts.trace)
+        if goal:
+            notes.append(f"goal={goal}")
+        if requests:
+            notes.append(f"requests={len(requests)}")
+        if artifacts.ask_responses:
+            notes.append(f"ask_responses={len(artifacts.ask_responses)}")
+
+        return ContextBundle(
+            status=final_response.status,
+            instruction=intent,
+            normalized_instruction=normalized_intent,
+            action=final_response.action,
+            resolved_entities=dict(final_response.resolved_entities),
+            derived_context=dict(final_response.derived_context),
+            rule_evidence=list(artifacts.rule_evidence),
+            state_evidence=list(artifacts.state_evidence),
+            citations=list(artifacts.citations),
+            ask_requests=[],
+            ask_responses=list(artifacts.ask_responses),
+            notes=notes,
+        )
+
+    def _run_heuristic(
+        self,
+        payload: dict[str, Any],
+        *,
+        fallback_reason: str | None = None,
+    ) -> ContextBundle:
         intent = str(payload.get("intent", ""))
         goal = _normalize_text(payload.get("goal", ""))
         requests = _normalize_requests(payload.get("requests"))
@@ -38,6 +135,8 @@ class ContextAgent:
             pending_request = interrupt.request
             analysis = _analyze_intent(normalized_intent, state, overrides=_build_analysis_overrides(response_map))
             notes = list(analysis["notes"])
+            if fallback_reason:
+                notes.append(f"fallback=heuristic:{fallback_reason}")
             if goal:
                 notes.append(f"goal={goal}")
             if requests:
@@ -66,6 +165,8 @@ class ContextAgent:
 
         internal_gaps = list(analysis["internal_gaps"])
         notes = list(analysis["notes"]) + list(internal_gaps)
+        if fallback_reason:
+            notes.append(f"fallback=heuristic:{fallback_reason}")
         if goal:
             notes.append(f"goal={goal}")
         if requests:
@@ -95,6 +196,53 @@ class ContextAgent:
             ask_responses=consumed_responses,
             notes=notes,
         )
+
+    def _invoke_llm_agent(
+        self,
+        *,
+        intent: str,
+        goal: str,
+        requests: list[str],
+        response_map: dict[str, AskResponse],
+        artifacts: _ContextAgentArtifacts,
+    ) -> "_ContextAgentFinalResponse":
+        prompt = _render_context_agent_user_prompt(
+            template=self.dependencies.user_prompt or "",
+            intent=intent,
+            goal=goal,
+            requests=requests,
+            ask_responses=list(response_map.values()),
+            artifacts=artifacts,
+        )
+        tools = self._build_agent_tools(artifacts=artifacts, response_map=response_map)
+        agent = (self.dependencies.agent_factory or create_agent)(
+            model=self.dependencies.model,
+            tools=tools,
+            system_prompt=self.dependencies.system_prompt,
+            response_format=_ContextAgentFinalResponse,
+            name="context_agent",
+        )
+        result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+        structured_response = result.get("structured_response") if isinstance(result, dict) else result
+        if structured_response is None:
+            raise ValueError("Context agent did not return a structured_response")
+        return _ContextAgentFinalResponse.model_validate(structured_response)
+
+    def _build_agent_tools(
+        self,
+        *,
+        artifacts: "_ContextAgentArtifacts",
+        response_map: dict[str, AskResponse],
+    ) -> list[BaseTool]:
+        return [
+            _ContextAgentGrepTool(delegate=self.dependencies.grep_tool, artifacts=artifacts),
+            _ContextAgentSearchTool(delegate=self.dependencies.search_tool, artifacts=artifacts),
+            _ContextAgentAskTool(
+                delegate=self.dependencies.ask_tool,
+                artifacts=artifacts,
+                response_map=response_map,
+            ),
+        ]
 
     def _resolve_state(self) -> dict[str, Any]:
         if self.dependencies.state_provider is not None:
@@ -202,6 +350,158 @@ class ContextAgent:
                 )
             )
         return evidence, citations, None
+
+
+class _ContextAgentFinalResponse(BaseModel):
+    status: str = Field(pattern="^(ready|blocked)$")
+    action: str | None = None
+    resolved_entities: dict[str, str] = Field(default_factory=dict)
+    derived_context: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _ContextAgentArtifacts:
+    rule_evidence: list[EvidenceItem] = field(default_factory=list)
+    state_evidence: list[EvidenceItem] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
+    ask_responses: list[AskResponse] = field(default_factory=list)
+    trace: list[str] = field(default_factory=list)
+
+
+class _ContextAgentGrepTool(BaseTool):
+    name: str = "grep"
+    description: str = "查询当前状态中的结构化事实，并返回只读状态证据。"
+    args_schema: type[BaseModel] = GrepInput
+
+    delegate: Any = Field(exclude=True)
+    artifacts: _ContextAgentArtifacts = Field(exclude=True)
+
+    def _run(self, expressions: list[str], limit: int | None = None) -> dict[str, Any]:
+        result = self.delegate.invoke({"expressions": expressions, "limit": limit})
+        status = str(result.get("status") or "error")
+        self.artifacts.trace.append(f"trace:grep status={status} expressions={json.dumps(expressions, ensure_ascii=False)}")
+        if status == "ok":
+            for match in result.get("matches", []):
+                self.artifacts.state_evidence.append(
+                    EvidenceItem(
+                        kind="state",
+                        summary=f"{match['key']} = {match['value']}",
+                        source="grep",
+                        locator=match["key"],
+                        data={"sim": match.get("sim")},
+                    )
+                )
+        return result
+
+
+class _ContextAgentSearchTool(BaseTool):
+    name: str = "search"
+    description: str = "检索与当前意图结算最直接相关的规则原文证据。"
+    args_schema: type[BaseModel] = SearchInput
+
+    delegate: Any = Field(exclude=True)
+    artifacts: _ContextAgentArtifacts = Field(exclude=True)
+
+    def _run(
+        self,
+        query: str,
+        mode: str = "balanced",
+        limit: int = 3,
+        fetch_k: int | None = None,
+    ) -> dict[str, Any]:
+        result = self.delegate.invoke({"query": query, "mode": mode, "limit": limit, "fetch_k": fetch_k})
+        status = str(result.get("status") or "error")
+        self.artifacts.trace.append(f"trace:search status={status} query={query}")
+        if status == "ok":
+            for hit in result.get("hits", []):
+                metadata = hit.get("metadata", {}) if isinstance(hit.get("metadata"), dict) else {}
+                title = metadata.get("title") or metadata.get("path") or "<rule>"
+                self.artifacts.rule_evidence.append(
+                    EvidenceItem(
+                        kind="rule",
+                        summary=f"{title}: {hit.get('text', '')}",
+                        source="search",
+                        locator=str(metadata.get("path") or metadata.get("title") or ""),
+                        data={"score": hit.get("score"), "metadata": metadata},
+                    )
+                )
+                self.artifacts.citations.append(
+                    Citation(
+                        source=str(title),
+                        locator=str(metadata.get("path") or metadata.get("book") or ""),
+                        detail=str(metadata.get("doc_type") or ""),
+                    )
+                )
+        return result
+
+
+class _ContextAgentAskTool(BaseTool):
+    name: str = "ask"
+    description: str = "当缺口已经阻止安全 grounding 时，向 DM 发起一个结构化 ask。"
+    args_schema: type[BaseModel] = AskInput
+
+    delegate: AskTool = Field(exclude=True)
+    artifacts: _ContextAgentArtifacts = Field(exclude=True)
+    response_map: dict[str, AskResponse] = Field(default_factory=dict, exclude=True)
+
+    def _run(
+        self,
+        question_id: str,
+        prompt: str,
+        options: list[Any] | None = None,
+        default_option_id: str | None = None,
+        allow_custom_input: bool = False,
+        custom_input_label: str | None = None,
+        custom_input_placeholder: str | None = None,
+        reason: str | None = None,
+        resume_response: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = self.response_map.get(question_id)
+        self.artifacts.trace.append(f"trace:ask question_id={question_id}")
+        payload = self.delegate.invoke(
+            {
+                "question_id": question_id,
+                "prompt": prompt,
+                "options": options or [],
+                "default_option_id": default_option_id,
+                "allow_custom_input": allow_custom_input,
+                "custom_input_label": custom_input_label,
+                "custom_input_placeholder": custom_input_placeholder,
+                "reason": reason,
+                "resume_response": response.model_dump() if response is not None else resume_response,
+            }
+        )
+        normalized = AskResponse.model_validate(payload)
+        if normalized not in self.artifacts.ask_responses:
+            self.artifacts.ask_responses.append(normalized)
+        return normalized.model_dump()
+
+
+def _render_context_agent_user_prompt(
+    *,
+    template: str,
+    intent: str,
+    goal: str,
+    requests: list[str],
+    ask_responses: list[AskResponse],
+    artifacts: _ContextAgentArtifacts,
+) -> str:
+    values = {
+        "instruction": intent,
+        "intent": intent,
+        "goal": goal,
+        "requests_block": "\n".join(f"- {item}" for item in requests) if requests else "- <none>",
+        "requests_json": json.dumps(requests, ensure_ascii=False, indent=2),
+        "ask_responses_json": json.dumps([item.model_dump() for item in ask_responses], ensure_ascii=False, indent=2),
+        "state_evidence_json": json.dumps([item.model_dump() for item in artifacts.state_evidence], ensure_ascii=False, indent=2),
+        "rule_evidence_json": json.dumps([item.model_dump() for item in artifacts.rule_evidence], ensure_ascii=False, indent=2),
+        "trace_block": "\n".join(f"- {item}" for item in artifacts.trace) if artifacts.trace else "- <none>",
+    }
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace(f"{{{{{key}}}}}", str(value))
+    return rendered
 
 
 def _analyze_intent(intent: str, state: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from augury.agent import (
     PlannerRequest,
@@ -16,9 +17,14 @@ from augury.agent import (
     render_context_agent_eval,
     run_context_agent_eval,
 )
-from augury.agent.cli_ask import prompt_for_ask_requests
+from augury.agent.utils.cli_ask import prompt_for_ask_requests
 from augury.agent.models import AskRequest
 from augury.agent.tools.search_stub import create_search_stub_tool
+from src.tests.config_helpers import write_project_config
+from src.tests.context_agent_helpers import (
+    DEFAULT_CONTEXT_AGENT_TEST_USER_PROMPT,
+    build_scripted_context_agent_dependencies,
+)
 
 
 class ContextAgentEvalTests(unittest.TestCase):
@@ -43,7 +49,7 @@ class ContextAgentEvalTests(unittest.TestCase):
     def test_run_context_agent_eval_returns_realtime_bundle_for_default_fixture(self) -> None:
         result = run_context_agent_eval(
             intent="Aldera用火球术攻击goblin",
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
 
         self.assertEqual(DEFAULT_CONTEXT_AGENT_EVAL_STATE_FILE.resolve(), result.state_file)
@@ -63,7 +69,7 @@ class ContextAgentEvalTests(unittest.TestCase):
     def test_render_context_agent_eval_human_output_contains_key_sections(self) -> None:
         result = run_context_agent_eval(
             intent="Aldera用长剑攻击goblin_1",
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
 
         rendered = render_context_agent_eval(result)
@@ -82,12 +88,13 @@ class ContextAgentEvalTests(unittest.TestCase):
         self.assertIn("citations", rendered)
         self.assertIn("ask_requests", rendered)
         self.assertIn("ask_interaction:", rendered)
+        self.assertIn("agent_trace", rendered)
         self.assertIn("notes", rendered)
 
     def test_render_context_agent_eval_json_output_includes_payload_and_bundle(self) -> None:
         result = run_context_agent_eval(
             intent="Aldera用长剑攻击goblin_1",
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
 
         rendered = render_context_agent_eval(result, output_format="json")
@@ -121,12 +128,12 @@ y = 2
             result = run_context_agent_eval(
                 intent="Aldera用长剑攻击goblin_1",
                 state_file=state_path,
-                dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+                dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
             )
 
         self.assertEqual(state_path.resolve(), result.state_file)
-        self.assertEqual("needs_human", result.bundle.status)
-        self.assertTrue(any(item.question_id == "target_identification" for item in result.bundle.ask_requests))
+        self.assertEqual("ready", result.bundle.status)
+        self.assertEqual("weapon_attack", result.bundle.action)
 
     def test_default_intent_constant_matches_cli_default_shape(self) -> None:
         self.assertEqual("Aldera用火球术攻击goblin_1", DEFAULT_CONTEXT_AGENT_EVAL_INTENT)
@@ -161,11 +168,10 @@ y = 2
     def test_maybe_collect_cli_ask_responses_records_answers(self) -> None:
         result = run_context_agent_eval(
             intent="Aldera用火球术攻击goblin",
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
-        from unittest.mock import patch
 
-        with patch("augury.agent.context_eval.prompt_for_ask_requests") as mocked_prompt:
+        with patch("augury.agent.utils.context_eval.prompt_for_ask_requests") as mocked_prompt:
             mocked_prompt.return_value = [
                 {"question_id": "target_disambiguation", "selected_option_id": "goblin_1"},
                 {"question_id": "area_point", "custom_input": "(5,10)"},
@@ -178,14 +184,12 @@ y = 2
         self.assertIn("Collected DM answers", updated.ask_interaction_message or "")
 
     def test_run_context_agent_eval_sync_ask_resumes_and_returns_final_bundle(self) -> None:
-        from unittest.mock import patch
-
         answers = iter(["goblin_1", ""])
-        with patch("augury.agent.context_eval.prompt_for_ask_requests") as mocked_prompt:
+        with patch("augury.agent.utils.context_eval.prompt_for_ask_requests") as mocked_prompt:
             mocked_prompt.side_effect = lambda requests: [prompt_for_ask_requests(requests, input_func=lambda _prompt: next(answers))[0]]
             result = run_context_agent_eval(
                 intent="Aldera用火球术攻击goblin",
-                dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+                dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
                 sync_ask=True,
             )
 
@@ -200,7 +204,7 @@ y = 2
     def test_mark_cli_ask_interaction_skipped_records_reason(self) -> None:
         result = run_context_agent_eval(
             intent="Aldera用火球术攻击goblin",
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
 
         updated = mark_cli_ask_interaction_skipped(
@@ -212,14 +216,12 @@ y = 2
         self.assertIn("not an interactive TTY", updated.ask_interaction_message or "")
 
     def test_render_context_agent_eval_mentions_resume_result_after_sync_ask(self) -> None:
-        from unittest.mock import patch
-
         answers = iter(["goblin_1", ""])
-        with patch("augury.agent.context_eval.prompt_for_ask_requests") as mocked_prompt:
+        with patch("augury.agent.utils.context_eval.prompt_for_ask_requests") as mocked_prompt:
             mocked_prompt.side_effect = lambda requests: [prompt_for_ask_requests(requests, input_func=lambda _prompt: next(answers))[0]]
             result = run_context_agent_eval(
                 intent="Aldera用火球术攻击goblin",
-                dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+                dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
                 sync_ask=True,
             )
 
@@ -230,7 +232,7 @@ y = 2
     def test_render_context_agent_eval_json_reports_skipped_interaction(self) -> None:
         result = run_context_agent_eval(
             intent="Aldera用火球术攻击goblin",
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
         result = mark_cli_ask_interaction_skipped(
             result,
@@ -242,6 +244,48 @@ y = 2
 
         self.assertEqual("skipped", payload["ask_interaction"])
         self.assertIn("--json", payload["ask_interaction_message"])
+
+    def test_runtime_loads_context_agent_prompt_templates_from_config(self) -> None:
+        captured: dict[str, object] = {}
+
+        def factory(**kwargs: object) -> object:
+            captured["system_prompt"] = kwargs.get("system_prompt")
+
+            class Agent:
+                def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+                    captured["user_prompt"] = payload["messages"][0]["content"]  # type: ignore[index]
+                    return {
+                        "structured_response": {
+                            "status": "ready",
+                            "action": "weapon_attack",
+                            "resolved_entities": {"actor_id": "aldera", "target_id": "goblin_1"},
+                            "derived_context": {},
+                            "notes": ["action=weapon_attack"],
+                        }
+                    }
+
+            return Agent()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = write_project_config(
+                Path(temp_dir) / "config.toml",
+                planner_context_agent_system_prompt_template="Context agent system prompt from config",
+                planner_context_agent_user_prompt_template=DEFAULT_CONTEXT_AGENT_TEST_USER_PROMPT,
+            )
+            with patch.dict("os.environ", {"PLANNER_API_KEY": "test-key", "SEARCH_API_KEY": "search-key"}, clear=False):
+                result = run_context_agent_eval(
+                    intent="Aldera用长剑攻击goblin_1",
+                    config_path=config_path,
+                    dependencies=PlannerDependencies(
+                        search_tool=create_search_stub_tool(),
+                        context_agent_agent_factory=factory,
+                    ),
+                )
+
+        self.assertEqual("ready", result.bundle.status)
+        self.assertEqual("Context agent system prompt from config", captured["system_prompt"])
+        self.assertIn("Intent: Aldera用长剑攻击goblin_1", str(captured["user_prompt"]))
+        self.assertIn("Current state evidence:", str(captured["user_prompt"]))
 
 
 class MainAgentContextSkillPromptTests(unittest.TestCase):

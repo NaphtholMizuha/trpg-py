@@ -6,10 +6,10 @@ from pathlib import Path
 from augury import create_planner
 from augury.agent import PlannerRequest
 from augury.agent.models import AskResponse
-from augury.agent.runtime import PlannerDependencies
-from augury.agent.state_loader import load_toml_state
+from augury.agent.utils.state_loader import load_toml_state
 from augury.agent.tools.search_stub import create_search_stub_tool
 from augury.engine.core.dice import FixedDiceRoller
+from src.tests.context_agent_helpers import build_scripted_context_agent_dependencies
 
 
 FIXTURE_STATE = Path("examples/evals/planner_e2e/world_state.toml")
@@ -22,7 +22,7 @@ class AgentRuntimeTests(unittest.TestCase):
     def test_runtime_lists_and_loads_default_subagents(self) -> None:
         planner = create_planner(
             state=self.load_state(),
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
 
         listed = planner.list_skills_tool.invoke({})
@@ -38,7 +38,7 @@ class AgentRuntimeTests(unittest.TestCase):
         state = self.load_state()
         planner = create_planner(
             state=state,
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
             roller=FixedDiceRoller([15, 6]),
         )
 
@@ -54,7 +54,7 @@ class AgentRuntimeTests(unittest.TestCase):
     def test_planner_returns_needs_human_for_ambiguous_fireball(self) -> None:
         planner = create_planner(
             state=self.load_state(),
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
 
         result = planner.invoke("Aldera用火球术攻击goblin")
@@ -68,7 +68,7 @@ class AgentRuntimeTests(unittest.TestCase):
     def test_planner_can_resume_after_ask_responses(self) -> None:
         planner = create_planner(
             state=self.load_state(),
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
             roller=FixedDiceRoller([15] + [6] * 8),
         )
         request = PlannerRequest(
@@ -93,7 +93,7 @@ class AgentRuntimeTests(unittest.TestCase):
         state["actors"]["aldera"]["spell_slots"]["level_3"]["current"] = 0
         planner = create_planner(
             state=state,
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
             roller=FixedDiceRoller([4] * 12),
         )
 
@@ -107,7 +107,7 @@ class AgentRuntimeTests(unittest.TestCase):
         state = self.load_state()
         planner = create_planner(
             state=state,
-            dependencies=PlannerDependencies(search_tool=create_search_stub_tool()),
+            dependencies=build_scripted_context_agent_dependencies(search_tool=create_search_stub_tool()),
         )
         request = PlannerRequest(
             instruction="记录Aldera当前AC供下一轮使用",
